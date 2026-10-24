@@ -1,14 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'pages/history_page.dart';
 import 'pages/home_page.dart';
 import 'pages/search_page.dart';
 import 'services/history_store.dart';
+import 'services/offline_cache.dart';
+import 'services/playback_store.dart';
 import 'services/show_service.dart';
+import 'services/source_store.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // media_kit（libmpv）需要在 runApp 前完成原生初始化
+  MediaKit.ensureInitialized();
   historyStore.load();
+  sourceStore.load();
+  playbackStore.load();
+  offlineCache.load();
   runApp(const HotShowApp());
 }
 

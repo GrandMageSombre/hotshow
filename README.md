@@ -1,6 +1,7 @@
 # 热剧速览 (HotShow)
 
 实时热播 **电视剧 / 短剧 / 动漫** 聚合搜索应用，一套 Flutter 代码同时支持 **Windows** 和 **Android**。
+发现好剧 → 一键检索完整片源 → 内置播放器直接看，支持选集、倍速与离线缓存。
 
 ![平台](https://img.shields.io/badge/平台-Windows%20%7C%20Android-blue) ![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter)
 
@@ -13,17 +14,72 @@
 | 🔍 自主搜索 | 关键词实时搜索（输入 600ms 自动联想搜索），覆盖电视剧/短剧/动漫/电影，显示评分、年份、地区、演员 |
 | 🕘 历史记录 | 搜索历史（可单条删除/一键清空，点击直接重搜）+ 浏览历史（最近看过 100 条，点击回看详情），本地持久化存储 |
 | ℹ️ 详情页 | 海报、评分、类型/地区/首播/集数、导演/主演、剧情简介、豆瓣热门短评，一键跳转豆瓣网页 |
+| ▶️ 在线播放 | 详情页一键到已配置的采集站检索「完整资源」（多线路 / 全集），内置 media_kit（libmpv）播放器：选集、切线路、倍速、全屏、自动连播 |
+| ⬇️ 离线缓存 | 单集或整条线路的 m3u8 分片抓到本地并重写为本地播放列表，断网可看；播放进度本地记忆，下次进入自动续播 |
+| 🗄️ 采集站管理 | 站点可增删改、启停、连通性自检；**工程不写死任何影视站点地址**，站点由自动搜索或手动填写得到 |
+| 🔎 自动搜索采集站 | **不用填任何地址**，点一下就自动拉取内置的公开清单源并解析出候选采集接口（也支持纯文本 / JSON 数组 / `{"sites":[…]}` / TVBox 风格配置，或手动粘贴），并发探测后标出可用/不可用/已添加，勾选即批量导入 |
+
 
 ## 技术实现
 
 - **框架**: Flutter (Material 3)，单代码库 → Android APK + Windows EXE
-- **数据源**: 豆瓣公开数据（未官方授权，仅供学习）
+- **元数据源**: 豆瓣公开数据（未官方授权，仅供学习）
   - 榜单：`m.douban.com/rexxar/api/v2/subject_collection/*`（网页端集合接口）
   - 短剧/网剧/动漫标签聚合：`frodo.douban.com/api/v2/tv/recommend`（App 端接口，HMAC-SHA1 请求签名）
   - 搜索：`frodo.douban.com/api/v2/search/subjects`
   - 详情：`frodo.douban.com/api/v2/tv/{id}` / `movie/{id}`
-- **本地存储**: `shared_preferences`（Android 应用私有目录 / Windows 用户配置目录）
+- **播放源**: 第三方影视采集站（maccms / 苹果CMS 的 `api.php/provide/vod` 接口），按片名检索后解析 `vod_play_from` + `vod_play_url` 得到多线路、全部分集的播放地址；站点通过「自动搜索」从公开清单源发现，代码里不写死任何站点地址
+- **播放器**: [`media_kit`](https://github.com/media-kit/media-kit)（libmpv），Windows 与 Android 双端原生播放 HLS/m3u8，播放/进度/全屏由 `media_kit_video` 的 AdaptiveVideoControls 承担，选集、倍速、缓存按钮为自绘
+- **离线缓存**: 自研 m3u8 解析（master 码流选择、`EXT-X-KEY` 逐分片密钥、`EXT-X-MAP`）+ 4 并发分片下载 + 本地播放列表重写，落盘后断网可播
+- **本地存储**: `shared_preferences`（Android 应用私有目录 / Windows 用户配置目录）+ `path_provider`（离线分片目录）
 - **状态管理**: 轻量 ChangeNotifier + StatefulWidget，无重型依赖
+
+## 播放功能怎么用
+
+1. 打开任意剧集详情页 → 底部 **「播放（检索完整资源）」**；
+2. 首次使用会提示「还没有配置采集站」，有两条路：
+   - **自动搜索**：点「自动搜索采集站」→ 直接点 **「开始自动搜索」**
+     （清单地址留空时会自动使用内置源；想换成自己的清单就填上地址，或点「粘贴地址列表」贴一批）。
+     应用会并发探测每个候选接口，**可用的自动勾选**、不可用的写明原因，
+     你确认后点底部「添加所选 N 个站点」即可；
+   - **手动添加**：点「手动添加」，填名称 + maccms 采集接口地址（如
+     `https://你的站点/api.php/provide/vod`）。列表动作默认 `detail`，个别站点可试 `list` / `videolist`；
+     卡片上的 🔌 按钮可当场自检。
+3. 回到资源页即可看到各站点命中的资源（含线路数、总集数、清晰度备注），点卡片进入播放；
+4. 播放页支持：选集、切换线路、倍速、自动连播、缓存当前集、缓存整条线路、上次进度续播（从资源列表进入时自动跳到上次位置）。
+
+### 自动搜索支持哪些清单格式
+
+**默认（留空清单地址）**：自动使用内置源 `lib/services/source_discovery.dart` 里的 `kDefaultCatalogUrls`
+（一个托管在 jsDelivr 上的公开 TVBox 配置），拉取后解析并探测。
+
+想换成自己的来源，把地址填进输入框即可（自己的服务器、Gist、jsDelivr / gitee 上的 JSON 都行），应用会宽容解析：
+
+```text
+# 纯文本：每行一个地址，井号是注释
+https://a.example.com/api.php/provide/vod/
+站点B | https://b.example.com/api.php/provide/vod/
+c.example.com          # 只写域名也行，按 maccms 约定补全成 /api.php/provide/vod/
+```
+
+```json
+["https://a.example.com/api.php/provide/vod/"]
+```
+
+```json
+{ "sites": [ { "name": "站点A", "api": "https://a.example.com/api.php/provide/vod/" } ] }
+```
+
+TVBox 风格的配置也能识别——`api` 是 `csp_XXX` 这类类型名时，会从 `ext` 里的 `site` / `siteUrl` 字段、
+或 `ext` 本身就是一个 URL 时还原出真实采集地址；`drpy`/JS 脚本源会被自动跳过，`/at/xml` 后缀会归一化成默认的 JSON 接口。
+
+不打开 App 也可以先验证单个接口是否可用：
+
+```bash
+dart run tool/source_check.dart https://你的站点/api.php/provide/vod/ 庆余年
+```
+
+> 采集站地址、可用性与内容来源都需要你自己确认；应用只在本地保存这些配置。
 
 ## 项目结构
 
@@ -31,36 +87,95 @@
 lib/
 ├── main.dart                  # 应用入口 + 底部导航壳
 ├── models/
-│   └── show_item.dart         # 影视条目/详情模型（三种来源 JSON 归一化）
+│   ├── show_item.dart         # 豆瓣影视条目/详情模型（三种来源 JSON 归一化）
+│   ├── media_resource.dart    # 采集站资源模型（线路 / 分集 / maccms 字段解析）
+│   └── source_site.dart       # 采集站配置模型（纯 Dart，可 dart run 直用）
 ├── services/
 │   ├── api_client.dart        # HTTP 层：frodo 签名客户端 + rexxar 客户端 + 统一错误
-│   ├── show_service.dart      # 业务数据层：榜单/搜索/详情（不依赖 Flutter，可单独测试）
+│   ├── show_service.dart      # 豆瓣业务层：榜单/搜索/详情（不依赖 Flutter，可单独测试）
+│   ├── resource_service.dart  # 采集站检索层：多站并发搜索 + 片名匹配排序
+│   ├── source_store.dart      # 采集站配置持久化
+│   ├── source_discovery.dart  # 采集站自动发现：清单解析 + 并发探测
+│   ├── m3u8.dart              # M3U8/HLS 播放列表解析与本地列表生成（纯 Dart）
+│   ├── offline_cache.dart     # 分片下载/离线缓存（并发、取消、断点目录管理）
+│   ├── playback_store.dart    # 播放进度（续播）持久化
 │   └── history_store.dart     # 搜索历史 + 浏览历史（本地持久化）
 ├── pages/
 │   ├── home_page.dart         # 三个分类 Tab + 子榜单切换 + 实时刷新
 │   ├── search_page.dart       # 搜索页（防抖联想 + 搜索历史）
 │   ├── history_page.dart      # 历史记录页
-│   └── detail_page.dart       # 详情页
+│   ├── detail_page.dart       # 详情页
+│   ├── resource_page.dart     # 资源检索页（多站点聚合结果）
+│   ├── player_page.dart       # 播放页（media_kit + 选集/倍速/缓存）
+│   ├── site_settings_page.dart# 采集站管理页
+│   └── source_discovery_page.dart # 自动搜索采集站页
 └── widgets/
     ├── show_card.dart         # 海报卡片（评分角标）
     └── common_views.dart      # 错误重试/空态/列表尾组件
-tool/api_check.dart            # 数据层真实接口集成测试（dart run 直跑）
+tool/api_check.dart            # 豆瓣数据层真实接口集成测试（dart run 直跑）
+tool/source_check.dart         # 采集站接口连通性验证（dart run 直跑）
+tool/discover_check.dart       # 清单拉取 + 批量探测（dart run 直跑）
 test/widget_test.dart          # UI 冒烟测试（注入假数据，不访问网络）
+test/resource_test.dart        # 采集站检索/解析/排序单测（本地假接口）
+test/discovery_test.dart       # 清单解析 + 并发探测单测（本地假清单/假站点）
+test/offline_test.dart         # m3u8 解析与分片缓存单测（本地假 HLS 服务）
 ```
 
 ## 构建与运行
 
 前置条件：[Flutter SDK](https://docs.flutter.cn/get-started/install)（建议 3.35+，本工程在 3.47 上开发验证）。
 
+> ⚠️ **首次构建需要能访问 GitHub Releases**：播放器 `media_kit` 会在构建期下载 libmpv 原生库
+> —— Android 为 `media-kit/libmpv-android-video-build` 的若干 `.jar`（arm64-v8a / armeabi-v7a / x86_64 / x86），
+> Windows 为 `libmpv-dev-x86_64.7z`。
+> 国内网络常常能打开 `github.com`，但**连不上实际承载资源的 `objects.githubusercontent.com`**，表现为
+> Gradle 长时间停在 `Downloading file from: https://github.com/...` 不动，或 CMake 卡住。
+> 遇到这种情况请先配置代理再构建：
+>
+> ```powershell
+> $env:HTTP_PROXY  = 'http://127.0.0.1:7890'
+> $env:HTTPS_PROXY = 'http://127.0.0.1:7890'
+> flutter build apk --release
+> ```
+>
+> 仅做数据层与逻辑验证（`flutter analyze` / `flutter test` / `dart run tool/*.dart`）**不需要**这些原生库。
+
+> 💡 **GitHub 完全不可达时的土办法**：`media_kit_libs_android_video` 的 Gradle 脚本会先看
+> `build/media_kit_libs_android_video/v1.1.7/` 下有没有 jar，**存在且 MD5 匹配就直接跳过下载**。
+> 所以可以用任何可达的加速镜像（如 `https://gh-proxy.com/https://github.com/…`）手动把这 4 个 jar
+> 下到该目录，再执行构建。文件名与 MD5 见
+> `$PUB_CACHE/hosted/pub.flutter-io.cn/media_kit_libs_android_video-1.3.8/android/build.gradle`。
+
+> ⚠️ **`PUB_CACHE` 必须与工程在同一个盘符**：若工程在 `C:\` 而 `PUB_CACHE=D:\pub-cache`，
+> 编译插件 Kotlin 源码时会抛
+> `Could not close incremental caches … java.lang.IllegalArgumentException: this and base files have different roots`
+> —— Kotlin 增量编译无法为跨盘符的文件计算相对路径，且**关掉 `kotlin.incremental` 也没用**。
+> 用目录联接即可复用已有缓存、不额外占空间：
+>
+> ```powershell
+> cmd /c mklink /J C:\pub-cache D:\pub-cache
+> $env:PUB_CACHE = 'C:\pub-cache'
+> flutter pub get      # 必须重新 pub get，让 .dart_tool 指向新路径
+> flutter build apk --release
+> ```
+
 ### 直接安装（Android）
 
 本项目已构建好发行版 APK：
 
 ```
-releases/spgj-v1.0.0-android.apk   （约 50MB，release 签名可直接安装）
+releases/spgj-v1.1.0-android.apk   （92.7MB，含播放器与自动搜索，release 签名可直接安装）
+releases/spgj-v1.0.0-android.apk   （49.7MB，旧版：仅榜单/搜索/详情，无播放能力）
 ```
 
-传到手机上点击安装即可（需允许"安装未知来源应用"）。
+传到手机上点击安装即可（需允许"安装未知来源应用"），或用 adb：
+
+```bash
+adb install releases/spgj-v1.1.0-android.apk
+```
+
+> v1.1.0 体积变大是因为内置了 3 个 ABI 的 `libmpv.so`（arm64-v8a / armeabi-v7a / x86_64，每个约 12MB）。
+> 只想出精简包可以按 ABI 拆分：`flutter build apk --release --split-per-abi`。
 
 ### 本地开发
 
@@ -70,10 +185,16 @@ flutter pub get
 # 本地调试运行（连接的设备/模拟器）
 flutter run
 
-# 数据层真实接口连通性验证（不需要任何设备）
+# 豆瓣数据层接口连通性验证（不需要任何设备）
 dart run tool/api_check.dart
 
-# UI 冒烟测试
+# 采集站接口连通性验证（不需要任何设备）
+dart run tool/source_check.dart https://你的站点/api.php/provide/vod/ 庆余年
+
+# 清单拉取 + 批量探测（不需要任何设备）
+dart run tool/discover_check.dart https://你的清单地址/sites.json
+
+# 单元测试 + UI 冒烟测试（全部使用本地假服务，不访问外网）
 flutter test
 
 # 静态检查
@@ -123,9 +244,28 @@ flutter build apk --release
 
 ## 已验证环境
 
-- Windows 10 22H2 x64 + Flutter 3.38 stable（`flutter analyze` 0 问题、`flutter test` 通过、`dart run tool/api_check.dart` 7/7 数据源连通）
-- 豆瓣接口为非官方公开接口，若某天接口变化导致失效，调整 `lib/services/api_client.dart` 与 `show_service.dart` 即可，UI 层无感知。
+**本机已验证**（Windows 10 22H2 x64 + Flutter 3.47 stable / Dart 3.13）：
+
+- `flutter analyze` → 0 问题
+- `flutter test` → 49/49 通过；采集站检索、清单解析与探测、m3u8 解析、分片离线缓存全部用**本地假服务**驱动，不依赖外网
+- `dart run tool/source_check.dart` → 对着本地假 maccms 接口跑通「连通性自检 + 按片名检索 + 线路/集数解析」
+- `dart run tool/api_check.dart` → 豆瓣数据源连通性（需要能访问豆瓣）
+
+**尚未在本机验证**：
+
+- **APK / EXE 的实际构建与运行**：本机未安装 Visual Studio，Windows 端无法构建；Android 端构建卡在
+  从 GitHub 下载 libmpv 原生库（本机网络访问不到 `objects.githubusercontent.com`，见上文构建提示）。
+  代码层面 `flutter analyze` 干净，`media_kit_video` 与 `media_kit_libs_*` 已正确注册进
+  `windows/flutter/generated_plugins.cmake` 与 Android 的 `GeneratedPluginRegistrant.java`；
+  但**真机播放、全屏、离线缓存的实测仍需要在有代理 + 完整工具链的机器上再走一遍**。
+- 采集站返回结构存在站点间差异，解析逻辑集中在 `lib/models/media_resource.dart` 与
+  `lib/services/resource_service.dart`，遇到不兼容的站点改这两处即可。
+
+豆瓣接口与采集站接口都是非官方公开接口，若某天变化导致失效，调整对应 service 即可，UI 层无感知。
 
 ## 免责声明
 
-本应用仅调用豆瓣公开网页/App 接口获取**元数据**（片名、评分、简介、海报），不提供任何影视内容的播放或下载，不存储用户数据到任何服务器。仅供学习交流，请勿用于商业用途。
+- 本应用内置的只有豆瓣公开元数据接口、一个通用播放器，以及**若干公开清单源的地址**（供「自动搜索采集站」拉取候选接口）；**不内置、不存储、不代理任何影视播放源**；
+- 播放能力依赖使用者通过「自动搜索」或手动添加的第三方采集站接口。这些站点多为非官方来源，其内容合法性、可用性与版权状态需由使用者自行判断，**请仅用于学习交流，勿用于商业用途**；
+- 离线缓存功能仅是把使用者指定地址的分片暂存到本机，请勿用于传播他人作品；
+- 梗概、海报、短评等版权归原作者与豆瓣所有；应用不向任何服务器上传用户数据，所有历史记录、站点配置、播放进度仅保存在本地。

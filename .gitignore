@@ -47,3 +47,6 @@ app.*.map.json
 # Widget Preview related
 .widget_preview/
 releases/
+
+# AI 工具（Reasonix）的运行时任务目录
+.reasonix/

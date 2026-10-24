@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/show_item.dart';
 import '../services/show_service.dart';
 import '../widgets/common_views.dart';
+import 'resource_page.dart';
 
 class DetailPage extends StatefulWidget {
   final ShowItem item;
@@ -15,11 +16,34 @@ class DetailPage extends StatefulWidget {
 
 class _DetailPageState extends State<DetailPage> {
   late Future<ShowDetail> _future;
+  ShowDetail? _detail;
 
   @override
   void initState() {
     super.initState();
-    _future = ShowService().detail(widget.item);
+    _load();
+  }
+
+  void _load() {
+    _future = ShowService().detail(widget.item).then((d) {
+      _detail = d;
+      return d;
+    });
+  }
+
+  /// 用于提升采集站片名匹配精度的年份
+  String? get _year {
+    final text = _detail?.pubdate ?? widget.item.subtitle;
+    return RegExp(r'(?:19|20)\d{2}').firstMatch(text)?.group(0);
+  }
+
+  Future<void> _openPlay() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ResourcePage(item: widget.item, year: _year),
+      ),
+    );
   }
 
   Future<void> _openDouban() async {
@@ -51,9 +75,7 @@ class _DetailPageState extends State<DetailPage> {
           if (snap.hasError) {
             return ErrorRetry(
               error: snap.error,
-              onRetry: () => setState(() {
-                _future = ShowService().detail(widget.item);
-              }),
+              onRetry: () => setState(_load),
             );
           }
           if (!snap.hasData) {
@@ -66,9 +88,9 @@ class _DetailPageState extends State<DetailPage> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
           child: FilledButton.icon(
-            onPressed: _openDouban,
-            icon: const Icon(Icons.play_circle_outline_rounded),
-            label: const Text('在豆瓣查看详情与片源'),
+            onPressed: _openPlay,
+            icon: const Icon(Icons.play_circle_fill_rounded),
+            label: const Text('播放（检索完整资源）'),
           ),
         ),
       ),
