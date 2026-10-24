@@ -46,4 +46,4 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
-releases/  # 构建产物不入库，APK 放 GitHub Release
+releases/

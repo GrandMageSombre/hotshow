@@ -57,7 +57,7 @@ test/widget_test.dart          # UI 冒烟测试（注入假数据，不访问�
 本项目已构建好发行版 APK：
 
 ```
-releases/热剧速览-v1.0.0-android.apk   （约 50MB，release 签名可直接安装）
+releases/spgj-v1.0.0-android.apk   （约 50MB，release 签名可直接安装）
 ```
 
 传到手机上点击安装即可（需允许"安装未知来源应用"）。
