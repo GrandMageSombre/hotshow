@@ -196,12 +196,13 @@ test/subtitle_test.dart        # 字幕编码/解包/偏移/存储 + 网格度�
 
 ### 直接安装（Android）
 
-本项目已构建好发行版 APK：
+本项目已构建好发行版：
 
 ```
-releases/spgj-v1.2.0-android.apk   （93.9MB，本轮：图片加载修复 + 网格溢出修复 + 在线字幕）
-releases/spgj-v1.1.0-android.apk   （92.7MB，含播放器与自动搜索）
-releases/spgj-v1.0.0-android.apk   （49.7MB，旧版：仅榜单/搜索/详情，无播放能力）
+releases/spgj-v1.2.0-android.apk       （93.9MB，本轮：图片加载修复 + 网格溢出修复 + 在线字幕）
+releases/spgj-v1.2.0-windows-x64.zip   （32.1MB，解压后双击 hotshow.exe，已内置 VC++ 运行库）
+releases/spgj-v1.1.0-android.apk       （92.7MB，含播放器与自动搜索）
+releases/spgj-v1.0.0-android.apk       （49.7MB，旧版：仅榜单/搜索/详情，无播放能力）
 ```
 
 > v1.2.0 的 APK 已用 `flutter build apk --release` 重新打包（`versionCode=3 / versionName=1.2.0`，
@@ -243,6 +244,20 @@ flutter build windows --release
 
 产物在 `build/windows/x64/runner/Release/`：`hotshow.exe` + `flutter_windows.dll` + `data/` +
 `media_kit_libs_windows_video` 的 DLL。**要整个目录一起分发**，只拷 exe 会缺运行库。
+
+> **踩过的两个坑**
+>
+> 1. **CMake 4.x 会把安装目录设成 `C:\Program Files\<app>`**：官方模板用
+>    `CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT` 判断，但 CMake 4 不再定义这个变量，
+>    结果 `runner\Release` 里只有一个 exe，DLL 和 `data\` 全被装去 Program Files。
+>    本仓库的 `windows/CMakeLists.txt` 已加兜底判断，安装目录固定在 `runner\<配置>`。
+> 2. **首次构建下载 libmpv / ANGLE 压缩包会校验 MD5 失败**（代理返回半截数据时）：
+>    可先用任意可达的镜像手动下载，放到 `build/windows/x64/` 下（文件名必须一致）：
+>    - `mpv-dev-x86_64-20230924-git-652a1dd.7z`（MD5 `a832ef24b3a6ff97cd2560b5b9d04cd8`）
+>    - `ANGLE.7z`（MD5 `e866f13e8d552348058afaafe869b1ed`）
+>
+>    CMake 检测到文件存在且 MD5 匹配就会跳过下载：
+>    `https://gh-proxy.com/https://github.com/media-kit/libmpv-win32-video-build/releases/download/2023-09-24/...`
 
 > 命令行安装（管理员 PowerShell，最快）：
 >
@@ -344,11 +359,10 @@ flutter build apk --release
 
 - **Android APK 构建**：已在本机成功构建（`flutter build apk --release`，93.9MB，219.5s），
   libmpv 的 4 个 ABI jar 能正常下载；真机播放、全屏、离线缓存仍建议再走一遍。
-- **Windows 桌面版**：`flutter build windows --release` 目前报
-  `Unable to find suitable Visual Studio toolchain`——已用 `vswhere` 核实本机 VS 2026 Insiders
-  缺「适用于 Windows 的 C++ CMake 工具」与 Windows SDK（详见上文「构建 Windows 桌面版」），
-  补齐组件后即可构建；代码层面 `media_kit_video` 与 `media_kit_libs_windows_video` 已注册进
-  `windows/flutter/generated_plugins.cmake`。
+- **Windows 桌面版构建**：已在本机成功构建（VS 2026 Insiders 18.12 + Windows 11 SDK 26100，
+  首次 81.5s / 增量 16.5s），`hotshow.exe` 的 FileVersion/ProductVersion 为 `1.2.0+3`，
+  已打成 `releases/spgj-v1.2.0-windows-x64.zip`（含 34 个文件，内置 VC145 运行库）。
+  真机播放、全屏、离线缓存仍建议在 Windows 上再走一遍。
 - 采集站返回结构存在站点间差异，解析逻辑集中在 `lib/models/media_resource.dart` 与
   `lib/services/resource_service.dart`，遇到不兼容的站点改这两处即可。
 - **字幕挂载的真机表现**：`SubtitleTrack.uri(本地路径)` 与 `sub-delay` 依赖 libmpv，

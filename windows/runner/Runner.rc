@@ -1,4 +1,4 @@
-// Microsoft Visual C++ generated resource script.
+﻿// Microsoft Visual C++ generated resource script.
 //
 #pragma code_page(65001)
 #include "resource.h"
@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.hotshow" "\0"
-            VALUE "FileDescription", "hotshow" "\0"
+            VALUE "FileDescription", "热剧速览" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "hotshow" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.hotshow. All rights reserved." "\0"
             VALUE "OriginalFilename", "hotshow.exe" "\0"
-            VALUE "ProductName", "hotshow" "\0"
+            VALUE "ProductName", "热剧速览" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

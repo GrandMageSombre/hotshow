@@ -65,7 +65,11 @@ include(flutter/generated_plugins.cmake)
 set(BUILD_BUNDLE_DIR "$<TARGET_FILE_DIR:${BINARY_NAME}>")
 # Make the "install" step default, as it's required to run.
 set(CMAKE_VS_INCLUDE_INSTALL_TO_DEFAULT_BUILD 1)
-if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+# CMake 4.x 不再定义 CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT，
+# 只靠原来那行会让安装目录落到 C:\Program Files\<app>，
+# 导致 build\windows\x64\runner\Release 里只有 exe、没有 DLL 和 data。
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT OR
+   CMAKE_INSTALL_PREFIX MATCHES "^[A-Za-z]:/Program Files/")
   set(CMAKE_INSTALL_PREFIX "${BUILD_BUNDLE_DIR}" CACHE PATH "..." FORCE)
 endif()
 
