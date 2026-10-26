@@ -226,12 +226,15 @@ Flutter 通过 `vswhere` 检查 **`Microsoft.VisualStudio.Component.VC.Tools.x86
 **`Microsoft.VisualStudio.Component.VC.CMake.Project`**，缺任意一个都会报
 `Unable to find suitable Visual Studio toolchain`。
 
-1. 打开 **Visual Studio Installer → 修改**；
+> 仓库根目录带了 **`.vsconfig`**：在 **Visual Studio Installer → 「更多」→「导入配置」** 里选中它，
+> 会自动勾好下面这些组件，不用手工找。
+
+1. 打开 **Visual Studio Installer**（开始菜单搜索，或在 VS 里点 **工具 → 获取工具和功能…**）→ **修改**；
 2. 工作负载勾选「**使用 C++ 的桌面开发**」；
 3. 右侧「安装详细信息」里确认这三项都被勾选：
    - MSVC v14x - VS 20xx C++ x64/x86 生成工具
-   - **适用于 Windows 的 C++ CMake 工具**（`VC.CMake.Project`，**最容易漏**）
-   - **Windows 11 SDK**（10.0.26100.0，或任意 10.0.19041+）
+   - **用于 Windows 的 C++ CMake 工具**（`VC.CMake.Project`，**最容易漏**，注意是「用于」不是「适用于」）
+   - **Windows 11 SDK**（10.0.26100.x 或 10.0.28000.x，分类在「SDK、库和框架」）
 4. 安装完成后执行：
 
 ```powershell
@@ -241,6 +244,16 @@ flutter build windows --release
 产物在 `build/windows/x64/runner/Release/`：`hotshow.exe` + `flutter_windows.dll` + `data/` +
 `media_kit_libs_windows_video` 的 DLL。**要整个目录一起分发**，只拷 exe 会缺运行库。
 
+> 命令行安装（管理员 PowerShell，最快）：
+>
+> ```powershell
+> & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vs_installer.exe" modify `
+>   --installPath "D:\vs\18\Insiders" `
+>   --add Microsoft.VisualStudio.Component.VC.CMake.Project `
+>   --add Microsoft.VisualStudio.Component.Windows11SDK.26100 `
+>   --passive --norestart
+> ```
+>
 > 自检：`vswhere -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.CMake.Project -property installationPath`
 > 有输出才说明 CMake 组件装上了；`C:\Program Files (x86)\Windows Kits\10\Include` 下存在
 > `10.0.xxxxx.0` 目录才说明 Windows SDK 装上了。
