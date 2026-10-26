@@ -199,24 +199,51 @@ test/subtitle_test.dart        # 字幕编码/解包/偏移/存储 + 网格度�
 本项目已构建好发行版 APK：
 
 ```
-releases/spgj-v1.1.0-android.apk   （92.7MB，含播放器与自动搜索，release 签名可直接安装）
+releases/spgj-v1.2.0-android.apk   （93.9MB，本轮：图片加载修复 + 网格溢出修复 + 在线字幕）
+releases/spgj-v1.1.0-android.apk   （92.7MB，含播放器与自动搜索）
 releases/spgj-v1.0.0-android.apk   （49.7MB，旧版：仅榜单/搜索/详情，无播放能力）
 ```
 
-> v1.2.0（本轮：图片加载修复 + 网格溢出修复 + 在线字幕）只改了源码，**尚未重新打包 APK**；
-> 需要时按下面的命令自行构建，产物仍叫 `app-release.apk`。
+> v1.2.0 的 APK 已用 `flutter build apk --release` 重新打包（`versionCode=3 / versionName=1.2.0`，
+> minSdk 24 / targetSdk 36）。
 >
-> 注：仓库的 `.gitignore` 忽略了 `releases/`，上面两个 APK 只存在于开发机本地，
+> 注：仓库的 `.gitignore` 忽略了 `releases/`，这些 APK 只存在于开发机本地，
 > 新克隆仓库后需要自己构建，或从原始发布渠道获取。
 
 传到手机上点击安装即可（需允许"安装未知来源应用"），或用 adb：
 
 ```bash
-adb install releases/spgj-v1.1.0-android.apk
+adb install releases/spgj-v1.2.0-android.apk
 ```
 
 > v1.1.0 体积变大是因为内置了 3 个 ABI 的 `libmpv.so`（arm64-v8a / armeabi-v7a / x86_64，每个约 12MB）。
 > 只想出精简包可以按 ABI 拆分：`flutter build apk --release --split-per-abi`。
+
+### 构建 Windows 桌面版
+
+需要 Visual Studio（2019 / 2022 / 2026 均可，Insiders 预览版也支持）+ 下列组件。
+Flutter 通过 `vswhere` 检查 **`Microsoft.VisualStudio.Component.VC.Tools.x86.x64`** 与
+**`Microsoft.VisualStudio.Component.VC.CMake.Project`**，缺任意一个都会报
+`Unable to find suitable Visual Studio toolchain`。
+
+1. 打开 **Visual Studio Installer → 修改**；
+2. 工作负载勾选「**使用 C++ 的桌面开发**」；
+3. 右侧「安装详细信息」里确认这三项都被勾选：
+   - MSVC v14x - VS 20xx C++ x64/x86 生成工具
+   - **适用于 Windows 的 C++ CMake 工具**（`VC.CMake.Project`，**最容易漏**）
+   - **Windows 11 SDK**（10.0.26100.0，或任意 10.0.19041+）
+4. 安装完成后执行：
+
+```powershell
+flutter build windows --release
+```
+
+产物在 `build/windows/x64/runner/Release/`：`hotshow.exe` + `flutter_windows.dll` + `data/` +
+`media_kit_libs_windows_video` 的 DLL。**要整个目录一起分发**，只拷 exe 会缺运行库。
+
+> 自检：`vswhere -prerelease -products * -requires Microsoft.VisualStudio.Component.VC.CMake.Project -property installationPath`
+> 有输出才说明 CMake 组件装上了；`C:\Program Files (x86)\Windows Kits\10\Include` 下存在
+> `10.0.xxxxx.0` 目录才说明 Windows SDK 装上了。
 
 ### 本地开发
 
@@ -300,13 +327,15 @@ flutter build apk --release
 - **字幕链路实测**：`dart run tool/subtitle_check.dart --legacy 8142102` 走通「免 Key 下载 zip（46KB）→ 解包出 srt（125KB）→ UTF-8 解码中文」，内容正确
 - **OpenSubtitles 匿名搜索**：开发机 IP 在验证时被限流（403），已做成可读提示 + 「填入 API Key」入口；请求参数与响应解析另有单测覆盖，**需在真实网络环境复测**
 
-**尚未在本机验证**：
+**已验证 / 尚未验证**：
 
-- **APK / EXE 的实际构建与运行**：本机未安装 Visual Studio，Windows 端无法构建；Android 端构建卡在
-  从 GitHub 下载 libmpv 原生库（本机网络访问不到 `objects.githubusercontent.com`，见上文构建提示）。
-  代码层面 `flutter analyze` 干净，`media_kit_video` 与 `media_kit_libs_*` 已正确注册进
-  `windows/flutter/generated_plugins.cmake` 与 Android 的 `GeneratedPluginRegistrant.java`；
-  但**真机播放、全屏、离线缓存的实测仍需要在有代理 + 完整工具链的机器上再走一遍**。
+- **Android APK 构建**：已在本机成功构建（`flutter build apk --release`，93.9MB，219.5s），
+  libmpv 的 4 个 ABI jar 能正常下载；真机播放、全屏、离线缓存仍建议再走一遍。
+- **Windows 桌面版**：`flutter build windows --release` 目前报
+  `Unable to find suitable Visual Studio toolchain`——已用 `vswhere` 核实本机 VS 2026 Insiders
+  缺「适用于 Windows 的 C++ CMake 工具」与 Windows SDK（详见上文「构建 Windows 桌面版」），
+  补齐组件后即可构建；代码层面 `media_kit_video` 与 `media_kit_libs_windows_video` 已注册进
+  `windows/flutter/generated_plugins.cmake`。
 - 采集站返回结构存在站点间差异，解析逻辑集中在 `lib/models/media_resource.dart` 与
   `lib/services/resource_service.dart`，遇到不兼容的站点改这两处即可。
 - **字幕挂载的真机表现**：`SubtitleTrack.uri(本地路径)` 与 `sub-delay` 依赖 libmpv，
