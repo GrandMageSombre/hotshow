@@ -9,6 +9,7 @@ import '../services/playback_store.dart';
 import '../services/resource_service.dart';
 import '../services/source_store.dart';
 import '../widgets/common_views.dart';
+import '../widgets/remote_image.dart';
 import 'player_page.dart';
 import 'site_settings_page.dart';
 import 'source_discovery_page.dart';
@@ -18,7 +19,16 @@ import 'source_discovery_page.dart';
 class ResourcePage extends StatefulWidget {
   final ShowItem item;
   final String? year;
-  const ResourcePage({super.key, required this.item, this.year});
+
+  /// 豆瓣别名，作为字幕搜索的片名候选
+  final List<String> altTitles;
+
+  const ResourcePage({
+    super.key,
+    required this.item,
+    this.year,
+    this.altTitles = const [],
+  });
 
   @override
   State<ResourcePage> createState() => _ResourcePageState();
@@ -242,7 +252,10 @@ class _ResourcePageState extends State<ResourcePage> {
             : () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => PlayerPage(resource: r),
+                    builder: (_) => PlayerPage(
+                      resource: r,
+                      altTitles: widget.altTitles,
+                    ),
                   ),
                 ),
         child: Padding(
@@ -255,19 +268,15 @@ class _ResourcePageState extends State<ResourcePage> {
                 child: SizedBox(
                   width: 76,
                   height: 106,
-                  child: r.cover.isEmpty
-                      ? Container(
-                          color: scheme.surfaceContainerHighest,
-                          child: const Icon(Icons.movie_outlined),
-                        )
-                      : Image.network(
-                          r.cover,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => Container(
-                            color: scheme.surfaceContainerHighest,
-                            child: const Icon(Icons.movie_outlined),
-                          ),
-                        ),
+                  child: RemoteImage(
+                    url: r.cover,
+                    cacheWidth:
+                        (76 * MediaQuery.devicePixelRatioOf(context)).round(),
+                    placeholder: (_) => Container(
+                      color: scheme.surfaceContainerHighest,
+                      child: const Icon(Icons.movie_outlined),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(width: 12),

@@ -7,6 +7,7 @@ import '../services/history_store.dart';
 import '../services/show_service.dart';
 import '../widgets/common_views.dart';
 import '../widgets/show_card.dart';
+import '../widgets/show_grid.dart';
 
 class SearchPage extends StatefulWidget {
   final String? initialQuery;
@@ -227,25 +228,27 @@ class _SearchPageState extends State<SearchPage> {
       return EmptyHint(message: '没有找到「${_controller.text.trim()}」相关的内容');
     }
     return LayoutBuilder(builder: (context, box) {
-      final w = box.maxWidth;
-      final cardW = gridCardWidth(w);
-      final columns = (w / 118).floor().clamp(2, 6);
+      final metrics = ShowGridMetrics.resolve(
+        availableWidth:
+            box.maxWidth - ShowGridMetrics.horizontalPadding * 2,
+        textScaler: MediaQuery.textScalerOf(context),
+      );
       return GridView.builder(
         controller: _scroll,
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: columns,
-          crossAxisSpacing: 12,
-          mainAxisSpacing: 14,
-          childAspectRatio: cardW / (cardW * 1.4 + 62),
+        padding: const EdgeInsets.fromLTRB(
+          ShowGridMetrics.horizontalPadding,
+          12,
+          ShowGridMetrics.horizontalPadding,
+          12,
         ),
+        gridDelegate: metrics.delegate(),
         itemCount: _items.length + 1,
         itemBuilder: (context, i) {
           if (i >= _items.length) {
             return ListTail(hasMore: _hasMore || _loading);
           }
-          return ShowCard(item: _items[i], coverWidth: cardW);
+          return ShowCard(item: _items[i]);
         },
       );
     });

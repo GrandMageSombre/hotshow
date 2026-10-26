@@ -76,4 +76,37 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('测试剧0'), findsWidgets);
   });
+
+  // 回归：354–377dp 这类宽度下，旧实现按两套公式算列数/卡片宽度，
+  // 会让海报顶出单元格、盖住下一行（真机上表现为「整张剧照占满屏」）。
+  for (final size in const [Size(320, 640), Size(360, 780), Size(375, 812), Size(411, 891)]) {
+    testWidgets('窄屏 ${size.width.toInt()}dp 海报网格不溢出', (tester) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        HotShowApp(service: FakeShowService(), autoRefresh: false),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(GridView), findsWidgets);
+    });
+  }
+
+  testWidgets('系统字体放大到 1.3 倍时卡片仍不溢出', (tester) async {
+    tester.view.physicalSize = const Size(360, 780);
+    tester.view.devicePixelRatio = 1.0;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.3;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+  });
 }

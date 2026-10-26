@@ -9,6 +9,7 @@ import 'services/offline_cache.dart';
 import 'services/playback_store.dart';
 import 'services/show_service.dart';
 import 'services/source_store.dart';
+import 'services/subtitle_store.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,6 +19,7 @@ void main() {
   sourceStore.load();
   playbackStore.load();
   offlineCache.load();
+  subtitleStore.load();
   runApp(const HotShowApp());
 }
 

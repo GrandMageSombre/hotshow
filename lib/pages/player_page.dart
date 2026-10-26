@@ -7,18 +7,31 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import '../models/media_resource.dart';
+import '../models/subtitle.dart';
 import '../services/offline_cache.dart';
 import '../services/playback_store.dart';
+import '../services/subtitle/subtitle_exception.dart';
+import '../services/subtitle_service.dart';
+import '../services/subtitle_store.dart';
+import 'subtitle_page.dart';
 
 /// 播放页：media_kit（libmpv）播放 m3u8，支持选集、线路切换、倍速、
-/// 自动连播、播放进度记忆与离线缓存。
+/// 自动连播、播放进度记忆、离线缓存与在线字幕。
 class PlayerPage extends StatefulWidget {
   final MediaResource resource;
 
   /// 是否沿用上次播放进度（从资源列表进入时为 true，手动选集时为 false）
   final bool resume;
 
-  const PlayerPage({super.key, required this.resource, this.resume = true});
+  /// 豆瓣别名（含英文名），字幕搜索时作为片名候选
+  final List<String> altTitles;
+
+  const PlayerPage({
+    super.key,
+    required this.resource,
+    this.resume = true,
+    this.altTitles = const [],
+  });
 
   @override
   State<PlayerPage> createState() => _PlayerPageState();
@@ -46,6 +59,17 @@ class _PlayerPageState extends State<PlayerPage> {
   bool _opening = true;
   String? _error;
 
+  /// 当前挂载的外部字幕（每部剧记住上次选择）
+  SubtitleFile? _subtitle;
+
+  /// 字幕模式：外挂 / 视频内嵌 / 关闭。
+  /// 之前用一个 bool 同时表示「关闭」和「内嵌」，换集时会连内嵌字幕一起关掉。
+  _SubtitleMode _subtitleMode = _SubtitleMode.external;
+
+  /// 每次打开媒体自增，用于丢弃被后续 open 取代的旧流程
+  int _openEpoch = 0;
+  bool _pendingSubtitleApply = false;
+
   // 整条线路批量缓存
   int _batchDone = 0;
   int _batchTotal = 0;
@@ -71,6 +95,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _groupIndex = _resolveInitialGroup();
     _episodeIndex = _resolveInitialEpisode();
     _applyResumeRecord();
+    _subtitle = subtitleStore.selectedFor(_r.key);
 
     _completedSub = _player.stream.completed.listen(_onCompleted);
     _errorSub = _player.stream.error.listen((e) {
@@ -81,6 +106,7 @@ class _PlayerPageState extends State<PlayerPage> {
       (_) => _saveProgress(),
     );
     _cache.addListener(_onCacheTick);
+    subtitleStore.addListener(_onSubtitleStoreChanged);
 
     WidgetsBinding.instance.addPostFrameCallback((_) => _openCurrent());
   }
@@ -91,9 +117,35 @@ class _PlayerPageState extends State<PlayerPage> {
     _completedSub.cancel();
     _errorSub.cancel();
     _cache.removeListener(_onCacheTick);
+    subtitleStore.removeListener(_onSubtitleStoreChanged);
     _saveProgress();
     _player.dispose();
     super.dispose();
+  }
+
+  /// 字幕配置是异步加载的：加载完成后如果发现本剧有记住的字幕，补挂上去
+  void _onSubtitleStoreChanged() {
+    if (!mounted) return;
+    final selected = subtitleStore.selectedFor(_r.key);
+    final previous = _subtitle;
+    final changed = selected?.path != previous?.path ||
+        selected?.delayMs != previous?.delayMs;
+    if (!changed) return;
+
+    setState(() {
+      _subtitle = selected;
+      if (selected == null && previous != null) {
+        // 当前字幕被删掉了：保持«无字幕»，而不是让旧轨道继续挂在画面上
+        _subtitleMode = _SubtitleMode.off;
+      } else if (selected != null && _subtitleMode == _SubtitleMode.off) {
+        _subtitleMode = _SubtitleMode.external;
+      }
+    });
+    if (_opening) {
+      _pendingSubtitleApply = true;
+    } else {
+      _applySubtitle();
+    }
   }
 
   void _onCacheTick() {
@@ -141,6 +193,7 @@ class _PlayerPageState extends State<PlayerPage> {
       });
       return;
     }
+    final epoch = ++_openEpoch;
     final cached = _cache.byKey(_cacheKeyFor(_groupIndex, _episodeIndex));
     final useLocal =
         cached != null && File(cached.localFile).existsSync();
@@ -156,17 +209,255 @@ class _PlayerPageState extends State<PlayerPage> {
         Media(uri, httpHeaders: useLocal ? null : _headersFor(ep.url)),
         play: true,
       );
+      // 已被更新的打开请求（连点选集/自动连播）取代，别再往下挂字幕
+      if (epoch != _openEpoch) return;
       final target = seekTo ?? _pendingSeek;
       _pendingSeek = null;
       if (target != null && target > const Duration(seconds: 3)) {
         await _player.seek(target);
       }
       await _player.setRate(_rate);
+      // 换集/换线路后 libmpv 会清空外部字幕，需重新挂载
+      await _applySubtitle();
+      _pendingSubtitleApply = false;
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted && epoch == _openEpoch) setState(() => _error = '$e');
     } finally {
-      if (mounted) setState(() => _opening = false);
+      if (mounted && epoch == _openEpoch) {
+        setState(() => _opening = false);
+        if (_pendingSubtitleApply) {
+          _pendingSubtitleApply = false;
+          await _applySubtitle();
+        }
+      }
     }
+  }
+
+  /// 按当前模式挂字幕：外挂文件 / 视频内嵌 / 关闭
+  Future<void> _applySubtitle() async {
+    final file = _subtitle;
+    try {
+      switch (_subtitleMode) {
+        case _SubtitleMode.off:
+          await _player.setSubtitleTrack(SubtitleTrack.no());
+          return;
+        case _SubtitleMode.embedded:
+          await _player.setSubtitleTrack(SubtitleTrack.auto());
+          return;
+        case _SubtitleMode.external:
+          if (file == null) return;
+          if (!File(file.path).existsSync()) {
+            if (mounted) setState(() => _subtitle = null);
+            return;
+          }
+          await _player.setSubtitleTrack(
+            SubtitleTrack.uri(
+              file.path,
+              title: file.label,
+              language: file.language,
+            ),
+          );
+          // 偏移优先用 mpv 的 sub-delay；文件里已经烘进偏移的别再叠加
+          await _setSubtitleDelay(
+            file.path == file.basePath ? file.delayMs : 0,
+          );
+      }
+    } catch (e) {
+      _toast('字幕加载失败：${subtitleErrorMessage(e)}');
+    }
+  }
+
+  /// 实时字幕偏移（秒）。libmpv 的 `sub-delay` 属性，不重写文件。
+  Future<bool> _setSubtitleDelay(int ms) async {
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return false;
+    try {
+      await platform.command(
+        ['set', 'sub-delay', (ms / 1000).toStringAsFixed(3)],
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _openSubtitleMenu() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: _subtitleSheet,
+    );
+    if (!mounted || action == null) return;
+    if (action == 'search') {
+      await _pickSubtitle();
+      return;
+    }
+    if (action == 'embedded') {
+      setState(() => _subtitleMode = _SubtitleMode.embedded);
+      await _player.setSubtitleTrack(SubtitleTrack.auto());
+      _toast('已切换到视频内嵌字幕');
+      return;
+    }
+    if (action == 'off') {
+      setState(() => _subtitleMode = _SubtitleMode.off);
+      await _player.setSubtitleTrack(SubtitleTrack.no());
+      _toast('已关闭字幕');
+      return;
+    }
+    if (action.startsWith('delay:')) {
+      final delta = int.tryParse(action.substring('delay:'.length));
+      if (delta != null) await _shiftSubtitle(delta);
+    }
+  }
+
+  Future<void> _pickSubtitle() async {
+    final picked = await Navigator.push<SubtitleFile>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SubtitlePage(
+          showKey: _r.key,
+          showTitle: _r.title,
+          year: _r.year.trim().isEmpty ? null : _r.year,
+          altTitles: widget.altTitles,
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _subtitle = picked;
+      _subtitleMode = _SubtitleMode.external;
+    });
+    await _applySubtitle();
+    _toast('字幕已加载：${picked.label}');
+  }
+
+  /// 微调时间轴：优先用 mpv `sub-delay` 实时生效；
+  /// 播放器不支持时退化成「重写文件 + 重挂」（bakeDelay）。
+  Future<void> _shiftSubtitle(int deltaMs) async {
+    final file = _subtitle;
+    if (file == null) return;
+    final next = (file.delayMs + deltaMs).clamp(-60000, 60000).toInt();
+    try {
+      if (!await _setSubtitleDelay(next)) {
+        final baked = await subtitleService.bakeDelay(file, next);
+        if (!mounted) return;
+        setState(() {
+          _subtitle = baked;
+          _subtitleMode = _SubtitleMode.external;
+        });
+        await _applySubtitle();
+        _toast('字幕延迟 ${baked.delayText}');
+        return;
+      }
+      final updated = await subtitleService.updateDelay(file, next);
+      if (!mounted) return;
+      setState(() {
+        _subtitle = updated;
+        _subtitleMode = _SubtitleMode.external;
+      });
+      _toast('字幕延迟 ${updated.delayText}');
+    } catch (e) {
+      _toast(subtitleErrorMessage(e));
+    }
+  }
+
+  Widget _subtitleSheet(BuildContext ctx) {
+    final scheme = Theme.of(ctx).colorScheme;
+    final file = _subtitle;
+    final active = file != null && _subtitleMode == _SubtitleMode.external;
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+            child: Row(
+              children: [
+                const Text('字幕',
+                    style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const Spacer(),
+                if (active)
+                  Text(
+                    '${file.languageLabel} · ${file.hasDelay ? '延迟 ${file.delayText}' : '已加载'}',
+                    style:
+                        TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                  ),
+              ],
+            ),
+          ),
+          ListTile(
+            leading: Icon(
+              active ? Icons.subtitles_rounded : Icons.subtitles_outlined,
+              color: active ? scheme.primary : null,
+            ),
+            title: Text(
+              file?.label ?? '未加载外部字幕',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13),
+            ),
+            subtitle: Text(
+              switch (_subtitleMode) {
+                _SubtitleMode.off => '已关闭字幕',
+                _SubtitleMode.embedded => '使用视频内嵌字幕',
+                _SubtitleMode.external =>
+                  file == null ? '还没有选择字幕' : '字幕会记住，换集自动重挂',
+              },
+              style: const TextStyle(fontSize: 11),
+            ),
+          ),
+          if (active)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, 'delay:-500'),
+                      child: const Text('提前 0.5s'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, 'delay:500'),
+                      child: const Text('延后 0.5s'),
+                    ),
+                  ),
+                  if (file.hasDelay) ...[
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: '恢复默认',
+                      onPressed: () =>
+                          Navigator.pop(ctx, 'delay:${-file.delayMs}'),
+                      icon: const Icon(Icons.restart_alt_rounded),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ListTile(
+            leading: const Icon(Icons.travel_explore_rounded),
+            title: const Text('在线获取字幕'),
+            subtitle: const Text('搜索 OpenSubtitles / 粘贴直链导入',
+                style: TextStyle(fontSize: 11)),
+            onTap: () => Navigator.pop(ctx, 'search'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.closed_caption_outlined),
+            title: const Text('使用视频内嵌字幕'),
+            onTap: () => Navigator.pop(ctx, 'embedded'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.subtitles_off_rounded),
+            title: const Text('关闭字幕'),
+            onTap: () => Navigator.pop(ctx, 'off'),
+          ),
+          const SizedBox(height: 6),
+        ],
+      ),
+    );
   }
 
   Future<void> _switchEpisode(int index, {int? group}) async {
@@ -320,7 +611,8 @@ class _PlayerPageState extends State<PlayerPage> {
                 style: const TextStyle(fontSize: 15)),
             Text(
               '${_episode?.name ?? ''} · ${_r.siteName} · ${_group?.name ?? ''}'
-              '${_isLocal ? ' · 本地' : ''}',
+              '${_isLocal ? ' · 本地' : ''}'
+              '${_subtitleMode == _SubtitleMode.external && _subtitle != null ? ' · 字幕' : ''}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 11, color: Colors.white70),
@@ -328,6 +620,16 @@ class _PlayerPageState extends State<PlayerPage> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: '字幕',
+            onPressed: _openSubtitleMenu,
+            icon: Icon(
+              Icons.subtitles_rounded,
+              color: _subtitleMode == _SubtitleMode.external && _subtitle != null
+                  ? Colors.amberAccent
+                  : null,
+            ),
+          ),
           IconButton(
             tooltip: _autoNext ? '关闭自动连播' : '开启自动连播',
             onPressed: () => setState(() => _autoNext = !_autoNext),
@@ -603,6 +905,9 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 }
+
+/// 字幕模式：外挂文件 / 视频内嵌 / 关闭
+enum _SubtitleMode { external, embedded, off }
 
 /// 选集面板：线路切换 + 分集网格
 class _EpisodeSheet extends StatefulWidget {

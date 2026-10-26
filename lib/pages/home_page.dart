@@ -6,6 +6,7 @@ import '../models/show_item.dart';
 import '../services/show_service.dart';
 import '../widgets/common_views.dart';
 import '../widgets/show_card.dart';
+import '../widgets/show_grid.dart';
 
 class HomePage extends StatefulWidget {
   final ShowService? service;
@@ -238,33 +239,29 @@ class _HotListViewState extends State<_HotListView> {
       return const EmptyHint(message: '榜单暂无数据');
     }
     return LayoutBuilder(builder: (context, box) {
-      final w = box.maxWidth;
+      final metrics = ShowGridMetrics.resolve(
+        availableWidth:
+            box.maxWidth - ShowGridMetrics.horizontalPadding * 2,
+        textScaler: MediaQuery.textScalerOf(context),
+      );
       return GridView.builder(
         controller: _scroll,
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-        gridDelegate: _gridDelegate(w),
+        padding: const EdgeInsets.fromLTRB(
+          ShowGridMetrics.horizontalPadding,
+          4,
+          ShowGridMetrics.horizontalPadding,
+          12,
+        ),
+        gridDelegate: metrics.delegate(),
         itemCount: d.items.length + 1,
         itemBuilder: (context, i) {
           if (i >= d.items.length) {
             return ListTail(hasMore: d.hasMore || d.loading);
           }
-          return ShowCard(item: d.items[i], coverWidth: _cardWidth(w));
+          return ShowCard(item: d.items[i]);
         },
       );
     });
-  }
-
-  double _cardWidth(double viewportWidth) => gridCardWidth(viewportWidth);
-
-  SliverGridDelegate _gridDelegate(double viewportWidth) {
-    final cardW = _cardWidth(viewportWidth);
-    final cardH = cardW * 1.4 + 62;
-    return SliverGridDelegateWithFixedCrossAxisCount(
-      crossAxisCount: (viewportWidth / 118).floor().clamp(2, 6),
-      crossAxisSpacing: 12,
-      mainAxisSpacing: 14,
-      childAspectRatio: cardW / cardH,
-    );
   }
 }

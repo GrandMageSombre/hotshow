@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/show_item.dart';
 import '../services/show_service.dart';
 import '../widgets/common_views.dart';
+import '../widgets/remote_image.dart';
 import 'resource_page.dart';
 
 class DetailPage extends StatefulWidget {
@@ -41,7 +42,11 @@ class _DetailPageState extends State<DetailPage> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => ResourcePage(item: widget.item, year: _year),
+        builder: (_) => ResourcePage(
+          item: widget.item,
+          year: _year,
+          altTitles: _detail?.aka ?? const [],
+        ),
       ),
     );
   }
@@ -118,20 +123,15 @@ class _DetailBody extends StatelessWidget {
               child: SizedBox(
                 width: 120,
                 height: 168,
-                child: item.cover.isEmpty
-                    ? Container(
-                        color: scheme.surfaceContainerHighest,
-                        child: const Icon(Icons.movie_outlined),
-                      )
-                    : Image.network(
-                        item.cover,
-                        fit: BoxFit.cover,
-                        headers: const {'Referer': 'https://movie.douban.com/'},
-                        errorBuilder: (_, _, _) => Container(
-                          color: scheme.surfaceContainerHighest,
-                          child: const Icon(Icons.movie_outlined),
-                        ),
-                      ),
+                child: RemoteImage(
+                  url: item.cover,
+                  cacheWidth:
+                      (120 * MediaQuery.devicePixelRatioOf(context)).round(),
+                  placeholder: (_) => Container(
+                    color: scheme.surfaceContainerHighest,
+                    child: const Icon(Icons.movie_outlined),
+                  ),
+                ),
               ),
             ),
             const SizedBox(width: 16),

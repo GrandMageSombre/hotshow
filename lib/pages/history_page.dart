@@ -4,6 +4,7 @@ import '../models/show_item.dart';
 import '../services/history_store.dart';
 import '../widgets/common_views.dart';
 import '../widgets/show_card.dart';
+import '../widgets/show_grid.dart';
 import 'search_page.dart';
 
 class HistoryPage extends StatefulWidget {
@@ -70,21 +71,19 @@ class _HistoryPageState extends State<HistoryPage> {
                 ),
                 const SizedBox(height: 12),
                 LayoutBuilder(builder: (context, box) {
-                  final cardW = gridCardWidth(box.maxWidth);
-                  final columns = (box.maxWidth / 118).floor().clamp(2, 6);
+                  final metrics = ShowGridMetrics.resolve(
+                    availableWidth: box.maxWidth,
+                    textScaler: MediaQuery.textScalerOf(context),
+                  );
                   return GridView.builder(
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: columns,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 14,
-                      childAspectRatio: cardW / (cardW * 1.4 + 62),
-                    ),
+                    padding: EdgeInsets.zero,
+                    gridDelegate: metrics.delegate(),
                     itemCount: historyStore.viewHistory.length,
                     itemBuilder: (context, i) {
                       final ShowItem item = historyStore.viewHistory[i];
-                      return ShowCard(item: item, coverWidth: cardW);
+                      return ShowCard(item: item);
                     },
                   );
                 }),
