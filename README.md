@@ -33,7 +33,11 @@
 - **播放器**: [`media_kit`](https://github.com/media-kit/media-kit)（libmpv），Windows 与 Android 双端原生播放 HLS/m3u8，播放/进度/全屏由 `media_kit_video` 的 AdaptiveVideoControls 承担，选集、倍速、缓存按钮为自绘
 - **离线缓存**: 自研 m3u8 解析（master 码流选择、`EXT-X-KEY` 逐分片密钥、`EXT-X-MAP`）+ 4 并发分片下载 + 本地播放列表重写，落盘后断网可播
 - **在线字幕**: OpenSubtitles（`api.opensubtitles.com/api/v1`）+ 免 Key 的旧站下载通道 `dl.opensubtitles.org/en/download/sub/{legacy_id}`；自研 zip/gzip 解包（中央目录 + stored/deflate）、编码识别（UTF-8 / UTF-16 BOM / GBK）、字幕统一转 UTF-8 落盘；时间轴调整走 libmpv 的 `sub-delay` 实时生效，不支持时回退到重写字幕文件
-- **网络图片**: 豆瓣图床会按 **User-Agent** 拦截（Flutter 默认的 `Dart/x.y (dart:io)` 直接返回 403/418，只带 Referer 无效），因此所有海报请求统一带浏览器 UA + 站点 Referer，并在 `img1~img9` 多个 CDN 域名间失败重试
+- **网络图片**: 豆瓣图床会按 **User-Agent** 拦截（Flutter 默认的 `Dart/x.y (dart:io)` 直接返回 403/418，只带 Referer 无效），因此所有海报请求统一带浏览器 UA + 站点 Referer。此外按「尝试链」逐级降级：
+  `img1/2/3/9.doubanio.com`（https+头）→ 原域名 `http://` → 原地址去掉自定义头；
+  每步 12s 超时看门狗，全部失败记 10 分钟负缓存。
+  **长按任意封面**可弹出诊断信息（地址 / 错误 / 尝试链 / 版本），手机上不用连 adb 也能定位；
+  连电脑后 `adb logcat -s flutter` 可看每次请求的失败原因。
 - **本地存储**: `shared_preferences`（Android 应用私有目录 / Windows 用户配置目录）+ `path_provider`（离线分片目录、字幕目录）
 - **状态管理**: 轻量 ChangeNotifier + StatefulWidget，无重型依赖
 
@@ -199,8 +203,9 @@ test/subtitle_test.dart        # 字幕编码/解包/偏移/存储 + 网格度�
 本项目已构建好发行版：
 
 ```
-releases/spgj-v1.2.0-android.apk       （93.9MB，本轮：图片加载修复 + 网格溢出修复 + 在线字幕）
-releases/spgj-v1.2.0-windows-x64.zip   （32.1MB，解压后双击 hotshow.exe，已内置 VC++ 运行库）
+releases/spgj-v1.2.1-android.apk       （94.0MB，图片加载降级链 + 长按封面诊断，versionCode 4）
+releases/spgj-v1.2.1-windows-x64.zip   （32.1MB，同上，解压后双击 hotshow.exe，含 VC++ 运行库）
+releases/spgj-v1.2.0-android.apk       （93.9MB，上一版）
 releases/spgj-v1.1.0-android.apk       （92.7MB，含播放器与自动搜索）
 releases/spgj-v1.0.0-android.apk       （49.7MB，旧版：仅榜单/搜索/详情，无播放能力）
 ```

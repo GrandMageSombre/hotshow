@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../app_info.dart';
 import '../services/remote_ua.dart';
 
 /// 海报/封面统一加载组件。
@@ -9,9 +12,15 @@ import '../services/remote_ua.dart';
 /// 直接返回 403 / 418，只有 `Referer` 也没用；换成浏览器 UA + 站点 Referer
 /// 才会返回 200。这就是「有些剧的抓取图片加载不出来」的根因。
 ///
-/// 另外豆瓣把同一张图分发在 img1 / img2 / img3 / img9 多个域名上，个别网络下
-/// 某个域名可能解析失败，因此这里按域名轮询重试；采集站的海报则按同源
-/// Referer + 浏览器 UA 请求，避免多数站点的防盗链。
+/// 线上还遇到过几类失败，所以这里按「尝试链」逐级降级：
+/// 1. `img1/2/3/9.doubanio.com` 四个域名（带 UA + Referer）；
+/// 2. 原域名的 `http://`（个别网络会破坏 CDN 的 TLS）；
+/// 3. 原地址但**不带自定义请求头**（极少数代理会拒绝带 Referer 的请求）。
+/// 每一步有 12 秒看门狗，失败后自动换下一个；全部失败才落占位图，
+/// 并记住 10 分钟避免列表滚动时反复重试。
+///
+/// 长按封面可弹出诊断信息（地址 / 错误 / 已尝试项 / 应用版本），
+/// 方便在拿不到 logcat 的手机上定位问题。
 const String kImageUserAgent = kBrowserUserAgent;
 
 const String _doubanReferer = 'https://movie.douban.com/';
@@ -64,7 +73,42 @@ Map<String, String> imageHeaders(String url) {
   return headers;
 }
 
-/// 带 Referer / UA、失败自动换域名重试的图片组件。
+/// 一次加载尝试：地址 + 是否带自定义请求头
+class _Attempt {
+  final String url;
+  final bool useHeaders;
+
+  const _Attempt(this.url, this.useHeaders);
+
+  String get label => useHeaders ? url : '$url（无自定义头）';
+}
+
+List<_Attempt> _attemptsFor(String raw) {
+  final url = normalizeImageUrl(raw);
+  if (url.isEmpty) return const [];
+  final uri = Uri.tryParse(url);
+  if (uri == null || !uri.hasAuthority) return [_Attempt(url, true)];
+
+  final result = <_Attempt>[];
+  void add(String u, bool headers) {
+    if (result.any((a) => a.url == u && a.useHeaders == headers)) return;
+    result.add(_Attempt(u, headers));
+  }
+
+  if (_isDoubanHost(uri.host)) {
+    for (final h in _doubanHosts) {
+      add(uri.replace(scheme: 'https', host: '$h.doubanio.com').toString(), true);
+    }
+    add(uri.replace(scheme: 'http').toString(), true);
+    add(uri.replace(scheme: 'https').toString(), false);
+  } else {
+    add(url, true);
+    add(url, false);
+  }
+  return result;
+}
+
+/// 带 Referer / UA、失败自动降级的图片组件。
 ///
 /// [placeholder] 用于空地址、加载中与最终失败三种情况（保持列表骨架稳定）。
 class RemoteImage extends StatefulWidget {
@@ -88,38 +132,73 @@ class RemoteImage extends StatefulWidget {
 }
 
 class _RemoteImageState extends State<RemoteImage> {
-  /// 加载失败的图（含所有候选域名都失败）在这里记一笔，
-  /// 列表滚动回来时不再重复打 4 次请求。
+  /// 加载失败的图（含所有候选都失败）在这里记一笔，
+  /// 列表滚动回来时不再重复打一轮请求。
   static final Map<String, DateTime> _deadUrls = {};
   static const Duration _deadTtl = Duration(minutes: 10);
+  static const Duration _attemptTimeout = Duration(seconds: 12);
 
-  late List<String> _urls = imageCandidates(widget.url);
+  late List<_Attempt> _attempts = _attemptsFor(widget.url);
   int _index = 0;
 
   /// 换 item / 换地址时自增，用于作废上一张图排队中的重试回调
   int _generation = 0;
   bool _advancing = false;
 
+  Timer? _watchdog;
+  Object? _lastError;
+  String? _lastUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _armWatchdog();
+  }
+
+  @override
+  void dispose() {
+    _watchdog?.cancel();
+    super.dispose();
+  }
+
   @override
   void didUpdateWidget(RemoteImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url) {
-      _urls = imageCandidates(widget.url);
+      _attempts = _attemptsFor(widget.url);
       _index = 0;
       _generation++;
       _advancing = false;
+      _lastError = null;
+      _lastUrl = null;
+      _armWatchdog();
     }
   }
 
-  /// 当前地址失败时换下一个域名。errorBuilder 在 build 期间执行，
+  /// 防止某次请求既不出图也不报错（弱网/被墙时常见）：超时就当失败处理
+  void _armWatchdog() {
+    _watchdog?.cancel();
+    if (_attempts.isEmpty) return;
+    _watchdog = Timer(_attemptTimeout, () {
+      if (!mounted) return;
+      _tryNext(TimeoutException('超过 ${_attemptTimeout.inSeconds}s 未返回'));
+    });
+  }
+
+  /// 当前尝试失败后降级到下一个。errorBuilder 在 build 期间执行，
   /// 因此用 postFrame 推迟 setState，避免「build 中 setState」。
-  void _tryNextHost(Object error) {
+  void _tryNext(Object error) {
     if (_advancing) return;
+    _lastError = error;
+    if (_attempts.isNotEmpty) {
+      _lastUrl = _attempts[_index.clamp(0, _attempts.length - 1)].url;
+    }
+    debugPrint('[image] 失败(${_index + 1}/${_attempts.length}) $_lastUrl -> $error');
 
     // 404 / 410 说明这个路径在 CDN 上根本不存在，换域名也一样，直接记死
     final notFound = error is NetworkImageLoadException &&
         (error.statusCode == 404 || error.statusCode == 410);
-    if (notFound || _index + 1 >= _urls.length) {
+    if (notFound || _index + 1 >= _attempts.length) {
       _markDead();
       return;
     }
@@ -129,21 +208,22 @@ class _RemoteImageState extends State<RemoteImage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || generation != _generation) return;
       setState(() {
-        if (_index + 1 < _urls.length) _index++;
+        _index++;
         _advancing = false;
       });
+      _armWatchdog();
     });
   }
 
   void _markDead() {
-    if (_urls.isEmpty) return;
+    if (_attempts.isEmpty) return;
     if (_deadUrls.length > 300) _deadUrls.clear();
-    _deadUrls[_urls.first] = DateTime.now();
+    _deadUrls[_attempts.first.url] = DateTime.now();
   }
 
   bool get _isDead {
-    if (_urls.isEmpty) return false;
-    final key = _urls.first;
+    if (_attempts.isEmpty) return false;
+    final key = _attempts.first.url;
     final at = _deadUrls[key];
     if (at == null) return false;
     if (DateTime.now().difference(at) > _deadTtl) {
@@ -153,26 +233,128 @@ class _RemoteImageState extends State<RemoteImage> {
     return true;
   }
 
+  void _retryAll() {
+    if (_attempts.isEmpty) return;
+    _deadUrls.remove(_attempts.first.url);
+    setState(() {
+      _index = 0;
+      _lastError = null;
+      _lastUrl = null;
+      _advancing = false;
+      _generation++;
+    });
+    _armWatchdog();
+  }
+
+  /// 长按占位图弹出诊断信息：手机上不方便看 logcat 时靠它定位
+  void _showDiagnostics() {
+    if (!mounted) return;
+    final tried = _attempts.isEmpty
+        ? '（地址为空）'
+        : _attempts
+            .asMap()
+            .entries
+            .map((e) => '${e.key + 1}. ${e.value.label}')
+            .join('\n');
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('图片加载诊断'),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            '应用版本：$kAppVersion\n'
+            '当前进度：${_attempts.isEmpty ? 0 : _index + 1}/${_attempts.length}\n'
+            '最后一次地址：${_lastUrl ?? widget.url}\n'
+            '最后一次错误：${_lastError ?? '尚未返回错误（可能仍在加载）'}\n'
+            '\n尝试链：\n$tried',
+            style: const TextStyle(fontSize: 12, height: 1.5),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _retryAll();
+            },
+            child: const Text('重新加载'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showLogHint(ctx);
+            },
+            child: const Text('日志'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLogHint(BuildContext ctx) {
+    showDialog<void>(
+      context: ctx,
+      builder: (c) => AlertDialog(
+        title: const Text('抓取详细日志'),
+        content: const SelectableText(
+          '连电脑后执行：\n\n'
+          'adb logcat -s flutter\n\n'
+          '再长按一次出问题的封面，就能看到每次请求的地址与错误。',
+          style: TextStyle(fontSize: 12, height: 1.6),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('好')),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_urls.isEmpty || _isDead) return widget.placeholder(context);
-    final index = _index.clamp(0, _urls.length - 1);
-    final url = _urls[index];
+    if (_attempts.isEmpty) {
+      return GestureDetector(
+        onLongPress: _showDiagnostics,
+        child: widget.placeholder(context),
+      );
+    }
+    if (_isDead) {
+      return GestureDetector(
+        onLongPress: _showDiagnostics,
+        child: widget.placeholder(context),
+      );
+    }
+    final index = _index.clamp(0, _attempts.length - 1);
+    final attempt = _attempts[index];
     return Image.network(
-      url,
+      attempt.url,
       fit: widget.fit,
-      headers: imageHeaders(url),
+      headers: attempt.useHeaders ? imageHeaders(attempt.url) : null,
       cacheWidth: widget.cacheWidth,
       gaplessPlayback: true,
       // 加载中先占位，加载完直接显示，避免列表里出现「先空后跳」
       frameBuilder: (context, child, frame, wasSyncLoaded) {
-        if (wasSyncLoaded) return child;
-        if (frame == null) return widget.placeholder(context);
+        if (wasSyncLoaded) {
+          _watchdog?.cancel();
+          return child;
+        }
+        if (frame == null) {
+          return GestureDetector(
+            onLongPress: _showDiagnostics,
+            child: widget.placeholder(context),
+          );
+        }
+        _watchdog?.cancel();
         return child;
       },
       errorBuilder: (context, error, stack) {
-        _tryNextHost(error);
-        return widget.placeholder(context);
+        _tryNext(error);
+        return GestureDetector(
+          onLongPress: _showDiagnostics,
+          child: widget.placeholder(context),
+        );
       },
     );
   }
