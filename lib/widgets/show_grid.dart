@@ -61,22 +61,18 @@ class ShowGridMetrics {
         .clamp(2, 6);
     final itemWidth =
         math.max(1.0, (usable - spacing * (columns - 1)) / columns);
-    final scale = effectiveTextScale(textScaler);
-    final textHeight = coverTextGap +
-        titleFontSize * lineHeightFactor * 2 * scale +
-        subtitleGap +
-        subtitleFontSize * lineHeightFactor * scale +
-        heightSlack;
+    // 逐字号取缩放后的行高：Android 14 的非线性缩放用 scale(1) 估算会偏小
+    final scaler = textScaler.clamp(maxScaleFactor: maxTextScale);
+    final titleLine = scaler.scale(titleFontSize) * lineHeightFactor;
+    final subtitleLine = scaler.scale(subtitleFontSize) * lineHeightFactor;
+    final textHeight =
+        coverTextGap + titleLine * 2 + subtitleGap + subtitleLine + heightSlack;
     return ShowGridMetrics._(
       columns,
       itemWidth,
       itemWidth * posterAspectRatio + textHeight,
     );
   }
-
-  /// 卡片内部实际使用的字体放大倍率（与 [maxTextScale] 对齐）
-  static double effectiveTextScale(TextScaler textScaler) =>
-      math.min(textScaler.scale(1), maxTextScale);
 
   /// 配合 [resolve] 使用：GridView 的 padding 与这里的水平内边距保持一致
   SliverGridDelegate delegate() => SliverGridDelegateWithFixedCrossAxisCount(

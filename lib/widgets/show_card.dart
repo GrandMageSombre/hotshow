@@ -43,6 +43,10 @@ class ShowCard extends StatelessWidget {
               aspectRatio: 1 / ShowGridMetrics.posterAspectRatio,
               child: LayoutBuilder(builder: (context, box) {
                 final dpr = MediaQuery.devicePixelRatioOf(context);
+                // 横向列表/Row 里宽度可能无界，round() 会抛 UnsupportedError
+                final cacheWidth = box.maxWidth.isFinite && box.maxWidth > 0
+                    ? (box.maxWidth * dpr).round()
+                    : null;
                 return Stack(
                   children: [
                     Positioned.fill(
@@ -50,7 +54,7 @@ class ShowCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(10),
                         child: RemoteImage(
                           url: item.cover,
-                          cacheWidth: (box.maxWidth * dpr).round(),
+                          cacheWidth: cacheWidth,
                           placeholder: (_) => _coverFallback(scheme),
                         ),
                       ),

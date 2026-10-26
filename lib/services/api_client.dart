@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 
+import 'remote_ua.dart';
+
 /// 应用网络层异常，带用户可读的中文信息。
 class ApiException implements Exception {
   final String message;
@@ -24,9 +26,7 @@ class ApiClient {
       'api-client/1 com.douban.frodo/7.22.0.beta9(231) Android/23 '
       'product/Mate40 vendor/HUAWEI model/Mate40 brand/HUAWEI '
       'rom/android network/wifi platform/AndroidPad';
-  static const String _browserUa =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  static const String _browserUa = kBrowserUserAgent;
 
   static final ApiClient instance = ApiClient._();
 

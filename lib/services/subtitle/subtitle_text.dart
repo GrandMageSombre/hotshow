@@ -38,10 +38,9 @@ String decodeSubtitleBytes(List<int> bytes) {
 
   try {
     final decoded = gbk.decode(data, allowMalformed: true);
-    // 纯西文文件用 GBK 解也会「成功」，但会解出满屏汉字乱码，
-    // 因此只有确实出现足量汉字时才认为它是 GBK。
-    // 阈值取 0.12：正常中文字幕的汉字占比远高于此，而西文文件接近 0。
-    if (_cjkRatio(decoded) >= 0.12) return decoded;
+    // 纯西文文件用 GBK 解也会「成功」，但会解出满屏汉字乱码；
+    // 中文台词里「的了是在不我你…」几乎必然出现，用它兜住短字幕
+    if (_looksLikeChinese(decoded)) return decoded;
   } catch (_) {
     // 继续兜底
   }
@@ -81,6 +80,22 @@ double _cjkRatio(String text) {
   }
   if (total == 0) return 0;
   return cjk / total;
+}
+
+/// 判断 GBK 解码结果像不像中文。
+///
+/// 单看汉字占比对短字幕不灵（时间码、数字都是 ASCII）；再加上「常见汉字命中数」：
+/// 正常中文台词里「的了是在不我你…」必然出现若干个，而西文被 GBK 误解出的
+/// 生僻字几乎不会命中。
+bool _looksLikeChinese(String text) {
+  const common = '的了是在不我你这有就都一个们么说着过也为很到要可以对';
+  var hits = 0;
+  for (final rune in common.runes) {
+    if (text.contains(String.fromCharCode(rune))) hits++;
+    if (hits >= 3) break;
+  }
+  if (hits >= 3) return true;
+  return _cjkRatio(text) >= 0.12;
 }
 
 /// 判断字幕格式，返回可直接当作文件扩展名的值（srt / ass / vtt）。

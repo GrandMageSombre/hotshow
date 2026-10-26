@@ -34,6 +34,19 @@ class SubtitleStore extends ChangeNotifier {
   static String _safeKey(String s) =>
       s.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '_');
 
+  /// 目录名：可读前缀 + 稳定短 hash。
+  /// 只用 [_safeKey] 会把 `site#1_2` 和 `site_1#2` 归一到同一个目录。
+  static String _dirName(String key) {
+    final safe = _safeKey(key);
+    final prefix = safe.length > 32 ? safe.substring(0, 32) : safe;
+    var hash = 0x811c9dc5;
+    for (final unit in key.codeUnits) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0x7fffffff;
+    }
+    return '${prefix}_${hash.toRadixString(36)}';
+  }
+
   Future<void> load() async {
     if (_loaded) return;
     final sp = await SharedPreferences.getInstance();
@@ -103,7 +116,7 @@ class SubtitleStore extends ChangeNotifier {
     required List<int> utf8Bytes,
     required String ext,
   }) async {
-    final dir = Directory('${(await ensureRoot()).path}/${_safeKey(showKey)}');
+    final dir = Directory('${(await ensureRoot()).path}/${_dirName(showKey)}');
     if (!await dir.exists()) await dir.create(recursive: true);
 
     final stamp = DateTime.now().millisecondsSinceEpoch;
@@ -123,9 +136,13 @@ class SubtitleStore extends ChangeNotifier {
       addedAt: stamp,
     );
     final list = _files.putIfAbsent(showKey, () => [])..add(file);
-    // 超出上限时删掉最旧的（含其偏移副本）
+    // 超出上限时删掉最旧的（含其偏移副本）；如果删的正是当前选中项，
+    // 连选中记录一起清掉，否则播放页会指向一个已经不存在文件。
     while (list.length > _maxPerShow) {
       final old = list.removeAt(0);
+      if (_selected[showKey]?.path == old.path) {
+        _selected.remove(showKey);
+      }
       await _deleteRelated(old);
     }
     await _persist();

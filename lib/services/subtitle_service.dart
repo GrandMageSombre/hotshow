@@ -198,11 +198,17 @@ class SubtitleService {
 
   /// 粗判内容确实是字幕：SRT/VTT 的 `-->`、ASS 的段头、MicroDVD 的 `{n}{n}`
   bool _looksLikeSubtitle(String text) {
-    final sample = text.length > 6000 ? text.substring(0, 6000) : text;
-    if (sample.contains('-->')) return true;
-    if (sample.contains('[Script Info]')) return true;
-    if (sample.toUpperCase().contains('WEBVTT')) return true;
-    if (RegExp(r'\{\d+\}\{\d+\}').hasMatch(sample)) return true;
+    final head = text.trimLeft();
+    // HTML 注释里的 `<!-- -->` 也含 `-->`，先按开头把它排掉
+    if (head.startsWith('<')) return false;
+    if (text.contains('-->')) return true;
+    if (text.contains('[Script Info]') ||
+        text.contains('[Events]') ||
+        text.contains('[V4+ Styles]')) {
+      return true;
+    }
+    if (text.toUpperCase().contains('WEBVTT')) return true;
+    if (RegExp(r'\{\d+\}\{\d+\}').hasMatch(text)) return true;
     return false;
   }
 
@@ -214,13 +220,16 @@ class SubtitleService {
       req.headers.set('Referer', '${uri.scheme}://${uri.authority}/');
       req.headers.set('Accept', '*/*');
       final resp = await req.close().timeout(const Duration(seconds: 30));
-      final bytes = await resp.fold<List<int>>(<int>[], (a, b) {
+      final readFuture = resp.fold<List<int>>(<int>[], (a, b) {
         a.addAll(b);
         if (a.length > _maxBytes) {
           throw SubtitleException('字幕文件过大（超过 30MB），已中止下载');
         }
         return a;
-      }).timeout(const Duration(seconds: 60));
+      });
+      // Future.timeout 只完成 Future、不取消底层流：abort 之后的报错要吞掉
+      unawaited(readFuture.catchError((Object _) => <int>[]));
+      final bytes = await readFuture.timeout(const Duration(seconds: 60));
       if (resp.statusCode != 200) {
         throw SubtitleException('字幕下载失败（HTTP ${resp.statusCode}）');
       }

@@ -134,11 +134,15 @@ Uint8List? _readEntry(
 int _findEocd(Uint8List data, ByteData bd) {
   final minPos = data.length - 22 - 65535;
   final start = minPos < 0 ? 0 : minPos;
+  var fallback = -1;
   for (var i = data.length - 22; i >= start; i--) {
     if (bd.getUint32(i, Endian.little) != _sigEocd) continue;
-    // 必须满足「记录 + 注释」正好到文件末尾，避免命中注释里的假签名
     final commentLen = bd.getUint16(i + 20, Endian.little);
-    if (i + 22 + commentLen == data.length) return i;
+    final end = i + 22 + commentLen;
+    // 严格匹配：记录 + 注释正好到文件末尾
+    if (end == data.length) return i;
+    // 少数包在末尾有填充字节，退一步接受「不越界」的最后一个
+    if (end < data.length && fallback < 0) fallback = i;
   }
-  return -1;
+  return fallback;
 }

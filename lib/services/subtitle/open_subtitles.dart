@@ -57,7 +57,10 @@ class OpenSubtitlesSource {
 
     final res = await _request(uri, headers: _headers(apiKey: apiKey));
     if (res.status == 429) {
-      throw SubtitleException('请求太频繁了，等 1 分钟再试');
+      throw SubtitleException(
+        '请求太频繁了，等 1 分钟再试；也可以在「本地与直链」里填入免费 API Key 提高额度',
+        needsApiKey: true,
+      );
     }
     if (res.status == 401) {
       throw SubtitleException(
@@ -236,10 +239,20 @@ class OpenSubtitlesSource {
     return res.body;
   }
 
-  /// 出错时服务器可能返回 HTML 页面（首字节可能是空白或 BOM，得跳过再看）
+  /// 出错时服务器可能返回 HTML 页面（首字节可能是 BOM/空白，得跳过再看）
   bool _looksLikeHtml(_Response res) {
     if (res.contentType.contains('html')) return true;
-    for (final byte in res.body) {
+    final bytes = res.body;
+    var i = 0;
+    // UTF-8 BOM
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xEF &&
+        bytes[1] == 0xBB &&
+        bytes[2] == 0xBF) {
+      i = 3;
+    }
+    for (; i < bytes.length; i++) {
+      final byte = bytes[i];
       if (byte == 0x20 || byte == 0x0D || byte == 0x0A || byte == 0x09) continue;
       return byte == 0x3C; // '<'
     }
@@ -260,13 +273,16 @@ class OpenSubtitlesSource {
       if (body != null) req.add(body);
       final resp = await req.close().timeout(timeout);
       // 限制单次响应体积，避免异常大的文件把内存吃满
-      final bytes = await resp.fold<List<int>>(<int>[], (a, b) {
+      final readFuture = resp.fold<List<int>>(<int>[], (a, b) {
         a.addAll(b);
         if (a.length > _maxResponseBytes) {
           throw SubtitleException('字幕文件过大（超过 40MB），已中止下载');
         }
         return a;
-      }).timeout(timeout);
+      });
+      // Future.timeout 不会取消底层流；abort 之后底层抛的错别变成未捕获异常
+      unawaited(readFuture.catchError((Object _) => <int>[]));
+      final bytes = await readFuture.timeout(timeout);
       return _Response(
         resp.statusCode,
         bytes,

@@ -4,6 +4,7 @@ import 'dart:io';
 
 import '../models/source_site.dart';
 import 'api_client.dart';
+import 'remote_ua.dart';
 import 'resource_service.dart';
 
 /// 一个待探测的候选采集站
@@ -458,9 +459,7 @@ class SourceDiscovery {
 
   Future<String> _getText(Uri uri) async {
     final req = await _http.getUrl(uri);
-    req.headers.set('User-Agent',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-        '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
+    req.headers.set('User-Agent', kBrowserUserAgent);
     final resp = await req.close().timeout(const Duration(seconds: 10));
     final bytes = await resp.fold<List<int>>(<int>[], (a, b) => a..addAll(b));
     if (resp.statusCode != 200) {

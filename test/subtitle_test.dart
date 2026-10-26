@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:charset/charset.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hotshow/models/subtitle.dart';
@@ -34,6 +35,18 @@ void main() {
       // "你好" 的 GBK 编码
       final text = decodeSubtitleBytes([0xC4, 0xE3, 0xBA, 0xC3]);
       expect(text, '你好');
+    });
+
+    test('GBK 字幕（含时间码稀释）也能识别', () {
+      // 时间码/数字都是 ASCII，会把汉字占比压得很低，这是最容易判错的情况
+      const srt = '1\n'
+          '00:00:01,000 --> 00:00:02,000\n'
+          '你好，世界\n'
+          '\n'
+          '2\n'
+          '00:00:03,000 --> 00:00:04,000\n'
+          '今天天气不错\n';
+      expect(decodeSubtitleBytes(gbk.encode(srt)), contains('今天天气不错'));
     });
 
     test('纯西文文件不会被误判成 GBK', () {
@@ -232,6 +245,36 @@ void main() {
       expect(File(file.basePath).existsSync(), isFalse);
       expect(File(shifted.path).existsSync(), isFalse);
       expect(store.existingFilesFor('site#1'), isEmpty);
+    });
+
+    test('超过 8 条剪枝时，被删掉的选中项也要清空', () async {
+      SubtitleFile? first;
+      for (var i = 0; i < 8; i++) {
+        final f = await store.addBytes(
+          showKey: 'site#9',
+          label: '字幕$i',
+          language: 'zh-cn',
+          source: 'test',
+          utf8Bytes: utf8.encode(_srt),
+          ext: 'srt',
+        );
+        first ??= f;
+      }
+      await store.select('site#9', first);
+      expect(store.selectedFor('site#9'), isNotNull);
+
+      // 第 9 条会淘汰最旧的一条（正是当前选中项）
+      await store.addBytes(
+        showKey: 'site#9',
+        label: '字幕8',
+        language: 'zh-cn',
+        source: 'test',
+        utf8Bytes: utf8.encode(_srt),
+        ext: 'srt',
+      );
+      expect(store.selectedFor('site#9'), isNull);
+      expect(File(first!.path).existsSync(), isFalse);
+      expect(store.existingFilesFor('site#9').length, 8);
     });
   });
 

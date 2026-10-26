@@ -109,4 +109,19 @@ void main() {
 
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('系统字体放大到 2 倍（被夹到上限）仍不溢出', (tester) async {
+    tester.view.physicalSize = const Size(360, 780);
+    tester.view.devicePixelRatio = 1.0;
+    tester.platformDispatcher.textScaleFactorTestValue = 2.0;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+  });
 }

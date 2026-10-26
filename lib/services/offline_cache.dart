@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'm3u8.dart';
+import 'remote_ua.dart';
 
 /// 一条已缓存到本地的剧集
 class CachedMedia {
@@ -100,9 +101,7 @@ class OfflineCacheException implements Exception {
 class OfflineCache extends ChangeNotifier {
   static const _kIndex = 'offline_index';
   static const _concurrency = 4;
-  static const _ua =
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+  static const _ua = kBrowserUserAgent;
 
   static final OfflineCache instance = OfflineCache();
 

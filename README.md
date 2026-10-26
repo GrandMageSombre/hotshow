@@ -56,10 +56,10 @@
 
 播放页右上角点 **字幕** 图标：
 
-- **在线获取字幕**：默认用当前片名搜索 OpenSubtitles，顶部还有豆瓣别名（常含英文名）的快捷搜索词——
+- **在线获取字幕**：默认用当前片名搜索 OpenSubtitles；如果豆瓣别名里有英文名，会**优先用英文名**起搜——
   多数中文字幕是按英文片名发布的。选中一条后自动下载、解包、转码并挂到画面上；
 - **本地与直链**：粘贴 `.srt` / `.ass` / `.vtt` / `.zip` / `.gz` 的字幕直链导入；这里也能管理本剧已下载的字幕、填写 OpenSubtitles 的免费 API Key；
-- **时间轴**：字幕面板里「提前 0.5s / 延后 0.5s」实时生效（libmpv `sub-delay`），可一键恢复；
+- **时间轴**：字幕面板里「提前 0.5s / 延后 0.5s」在面板内原地生效（libmpv `sub-delay`），可一键恢复，偏移会记住；
 - 每部剧的字幕选择会记住，**换集自动重挂**；字幕文件存在
   `<应用支持目录>/subtitles/<站点ID_资源ID>/` 下，换剧互不干扰。
 
@@ -119,6 +119,7 @@ lib/
 │   ├── source_store.dart      # 采集站配置持久化
 │   ├── source_discovery.dart  # 采集站自动发现：清单解析 + 并发探测
 │   ├── subtitle_service.dart  # 字幕业务层：搜索/下载/解包/转码/落盘/偏移
+│   ├── subtitle_message.dart  # 字幕异常 → 用户可读文案（带 debug 日志）
 │   ├── subtitle_store.dart    # 字幕文件与「每部剧选中哪条」的本地持久化
 │   ├── subtitle/
 │   │   ├── open_subtitles.dart  # OpenSubtitles 搜索 + 免 Key 下载通道
@@ -204,6 +205,9 @@ releases/spgj-v1.0.0-android.apk   （49.7MB，旧版：仅榜单/搜索/详情�
 
 > v1.2.0（本轮：图片加载修复 + 网格溢出修复 + 在线字幕）只改了源码，**尚未重新打包 APK**；
 > 需要时按下面的命令自行构建，产物仍叫 `app-release.apk`。
+>
+> 注：仓库的 `.gitignore` 忽略了 `releases/`，上面两个 APK 只存在于开发机本地，
+> 新克隆仓库后需要自己构建，或从原始发布渠道获取。
 
 传到手机上点击安装即可（需允许"安装未知来源应用"），或用 adb：
 
@@ -289,7 +293,7 @@ flutter build apk --release
 **本机已验证**（Windows 10 22H2 x64 + Flutter 3.47 stable / Dart 3.13）：
 
 - `flutter analyze` → 0 问题
-- `flutter test` → 78/78 通过；采集站检索、清单解析与探测、m3u8 解析、分片离线缓存、字幕编码/解包/偏移/存储、窄屏网格与大字号回归全部用**本地假数据**驱动，不依赖外网
+- `flutter test` → 81/81 通过；采集站检索、清单解析与探测、m3u8 解析、分片离线缓存、字幕编码/解包/偏移/存储、窄屏网格与大字号回归全部用**本地假数据**驱动，不依赖外网
 - `dart run tool/source_check.dart` → 对着本地假 maccms 接口跑通「连通性自检 + 按片名检索 + 线路/集数解析」
 - `dart run tool/api_check.dart` → 豆瓣数据源连通性（需要能访问豆瓣）
 - **豆瓣图床实测**：同一张海报用 `Dart/x.y (dart:io)` UA 请求返回 403/418，换成浏览器 UA + `Referer: https://movie.douban.com/` 返回 200——这就是「有些剧海报加载不出来」的原因

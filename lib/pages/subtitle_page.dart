@@ -3,6 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/subtitle.dart';
 import '../services/subtitle/subtitle_exception.dart';
+import '../services/subtitle_message.dart';
 import '../services/subtitle_service.dart';
 import '../services/subtitle_store.dart';
 
@@ -34,7 +35,7 @@ class SubtitlePage extends StatefulWidget {
 class _SubtitlePageState extends State<SubtitlePage>
     with SingleTickerProviderStateMixin {
   late final TextEditingController _keyword =
-      TextEditingController(text: _suggestions.first);
+      TextEditingController(text: _initialKeyword);
   final TextEditingController _url = TextEditingController();
   late final TextEditingController _apiKey =
       TextEditingController(text: subtitleStore.apiKey);
@@ -84,6 +85,16 @@ class _SubtitlePageState extends State<SubtitlePage>
       _localFiles = subtitleStore.existingFilesFor(widget.showKey);
       _current = subtitleStore.selectedFor(widget.showKey);
     });
+  }
+
+  /// 首次搜索用的关键词：优先含拉丁字母的别名。
+  /// OpenSubtitles 的中文片名命中率低，匿名额度又有限，先用英文名更划算。
+  String get _initialKeyword {
+    final latin = RegExp(r'[A-Za-z]{2,}');
+    for (final s in _suggestions) {
+      if (latin.hasMatch(s)) return s;
+    }
+    return _suggestions.first;
   }
 
   /// 片名候选：豆瓣主标题 + 别名（别名里往往有英文名，OpenSubtitles 更认这个）
@@ -187,6 +198,29 @@ class _SubtitlePageState extends State<SubtitlePage>
   }
 
   Future<void> _deleteLocal(SubtitleFile file) async {
+    final inUse = _current?.path == file.path;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除字幕'),
+        content: Text(
+          inUse
+              ? '「${file.label}」是本剧当前正在使用的字幕，删除后画面会关闭字幕。'
+              : '确定删除「${file.label}」吗？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
     await subtitleStore.removeFile(file);
     if (!mounted) return;
     _toast('已删除这条字幕');
@@ -213,6 +247,7 @@ class _SubtitlePageState extends State<SubtitlePage>
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -224,7 +259,11 @@ class _SubtitlePageState extends State<SubtitlePage>
               widget.showTitle,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 11, color: Colors.white70),
+              // 跟随主题：浅色模式下白色副标题会看不见
+              style: TextStyle(
+                fontSize: 11,
+                color: scheme.onSurfaceVariant,
+              ),
             ),
           ],
         ),
@@ -277,11 +316,11 @@ class _SubtitlePageState extends State<SubtitlePage>
           ),
         ),
         if (_suggestions.length > 1)
-          SizedBox(
-            height: 38,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
+          // 不固定高度：大字号机型上 ActionChip 会超 38dp 被裁
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
               children: [
                 for (final s in _suggestions)
                   Padding(

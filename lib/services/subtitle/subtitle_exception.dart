@@ -14,13 +14,3 @@ class SubtitleException implements Exception {
   @override
   String toString() => message;
 }
-
-/// 把任意异常转成能展示给用户的一句话。
-///
-/// 只有我们主动抛出的 [SubtitleException] / [FormatException] 带可读文案，
-/// 其它异常（json 解析、RangeError 之类）不要把英文原文糊到界面上。
-String subtitleErrorMessage(Object error) {
-  if (error is SubtitleException) return error.message;
-  if (error is FormatException) return error.message;
-  return '字幕处理失败，请稍后重试';
-}
