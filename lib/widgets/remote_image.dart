@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../app_info.dart';
@@ -7,19 +10,23 @@ import '../services/remote_ua.dart';
 
 /// 海报/封面统一加载组件。
 ///
-/// 豆瓣图床（`img*.doubanio.com`）会按 **User-Agent** 拦截请求：
-/// 不带浏览器 UA 时（Flutter 的 [NetworkImage] 默认发 `Dart/3.x (dart:io)`）
-/// 直接返回 403 / 418，只有 `Referer` 也没用；换成浏览器 UA + 站点 Referer
-/// 才会返回 200。这就是「有些剧的抓取图片加载不出来」的根因。
+/// 豆瓣图床（`img*.doubanio.com`）的 WAF 会拒绝两类请求，都返回 403/418：
 ///
-/// 线上还遇到过几类失败，所以这里按「尝试链」逐级降级：
-/// 1. `img1/2/3/9.doubanio.com` 四个域名（带 UA + Referer）；
+/// 1. **User-Agent 不是浏览器**：Flutter 的 [NetworkImage] 默认发 `Dart/x.y (dart:io)`；
+/// 2. **请求里出现两个 User-Agent**：`HttpClient.getUrl()` 会先自动塞一个默认的
+///    `Dart/x.y`，而 [NetworkImage] 用 `headers.add()` 加自定义头 —— 结果请求带着
+///    `Dart/x.y` 和浏览器 UA **两个** UA 头，WAF 照样判成机器人。
+///
+/// 因此这里不用 [Image.network]，而是用自定义 provider 走 `headers.set()`
+/// （覆盖语义）自己发请求。实测同一张图：add 双 UA → 403，set 单 UA → 200。
+///
+/// 线上还遇到过其它失败，按「尝试链」逐级降级：
+/// 1. `img1/2/3/9.doubanio.com` 四个域名（浏览器 UA + Referer + Accept）；
 /// 2. 原域名的 `http://`（个别网络会破坏 CDN 的 TLS）；
-/// 3. 原地址但**不带自定义请求头**（极少数代理会拒绝带 Referer 的请求）。
-/// 每一步有 12 秒看门狗，失败后自动换下一个；全部失败才落占位图，
-/// 并记住 10 分钟避免列表滚动时反复重试。
+/// 3. 裸请求（去掉 UA/Referer/Accept，模拟无头客户端）。
+/// 每步 12 秒看门狗，失败自动切下一个；全部失败落占位图并记 10 分钟负缓存。
 ///
-/// 长按封面可弹出诊断信息（地址 / 错误 / 已尝试项 / 应用版本），
+/// **长按封面**可弹出诊断信息（地址 / 错误 / 尝试链 / 版本），
 /// 方便在拿不到 logcat 的手机上定位问题。
 const String kImageUserAgent = kBrowserUserAgent;
 
@@ -73,14 +80,16 @@ Map<String, String> imageHeaders(String url) {
   return headers;
 }
 
-/// 一次加载尝试：地址 + 是否带自定义请求头
+/// 一次加载尝试：地址 + 请求头模式
 class _Attempt {
   final String url;
-  final bool useHeaders;
 
-  const _Attempt(this.url, this.useHeaders);
+  /// true = 浏览器 UA + Referer + Accept；false = 裸请求（去掉 UA/Referer/Accept）
+  final bool withHeaders;
 
-  String get label => useHeaders ? url : '$url（无自定义头）';
+  const _Attempt(this.url, this.withHeaders);
+
+  String get label => withHeaders ? url : '$url（裸请求，无 UA/Referer）';
 }
 
 List<_Attempt> _attemptsFor(String raw) {
@@ -91,7 +100,7 @@ List<_Attempt> _attemptsFor(String raw) {
 
   final result = <_Attempt>[];
   void add(String u, bool headers) {
-    if (result.any((a) => a.url == u && a.useHeaders == headers)) return;
+    if (result.any((a) => a.url == u && a.withHeaders == headers)) return;
     result.add(_Attempt(u, headers));
   }
 
@@ -106,6 +115,97 @@ List<_Attempt> _attemptsFor(String raw) {
     add(url, false);
   }
   return result;
+}
+
+/// 自定义图片 provider：用 `headers.set()` 覆盖默认 Dart UA，
+/// 避开 [Image.network] 的 `add()` 双 UA 问题；带 12s 超时与体积上限。
+class _FetchImageProvider extends ImageProvider<_FetchImageProvider> {
+  const _FetchImageProvider(
+    this.url, {
+    required this.plain,
+    this.cacheWidth,
+  });
+
+  final String url;
+
+  /// true = 裸请求（移除 UA/Referer/Accept）
+  final bool plain;
+  final int? cacheWidth;
+
+  @override
+  Future<_FetchImageProvider> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture<_FetchImageProvider>(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+    _FetchImageProvider key,
+    ImageDecoderCallback decode,
+  ) {
+    return MultiFrameImageStreamCompleter(
+      codec: _load(key),
+      scale: 1.0,
+      debugLabel: key.url,
+      informationCollector: () sync* {
+        yield StringProperty('url', key.url);
+        yield FlagProperty('plain', value: key.plain, ifTrue: '裸请求');
+      },
+    );
+  }
+
+  static const int _maxBytes = 20 * 1024 * 1024;
+
+  Future<ui.Codec> _load(_FetchImageProvider key) async {
+    final client = HttpClient()..autoUncompress = true;
+    try {
+      final request = await client.getUrl(Uri.parse(key.url));
+      // HttpClient.getUrl() 已经塞了默认 `Dart/x.y` UA，必须 set 覆盖；
+      // 用 add 会带上两个 UA，被豆瓣 WAF 判成机器人（403/418）。
+      if (key.plain) {
+        request.headers.removeAll(HttpHeaders.userAgentHeader);
+      } else {
+        request.headers.set(HttpHeaders.userAgentHeader, kImageUserAgent);
+        imageHeaders(key.url).forEach(request.headers.set);
+      }
+      final response =
+          await request.close().timeout(const Duration(seconds: 12));
+      if (response.statusCode != HttpStatus.ok) {
+        throw NetworkImageLoadException(
+          statusCode: response.statusCode,
+          uri: Uri.parse(key.url),
+        );
+      }
+      final bytes = await response.fold<List<int>>(<int>[], (a, b) {
+        a.addAll(b);
+        if (a.length > _maxBytes) {
+          throw Exception('图片超过 ${_maxBytes ~/ 1024 / 1024}MB，已中止');
+        }
+        return a;
+      }).timeout(const Duration(seconds: 20));
+      if (bytes.isEmpty) {
+        throw Exception('图片内容为空');
+      }
+      return await ui.instantiateImageCodec(
+        Uint8List.fromList(bytes),
+        targetWidth: key.cacheWidth,
+      );
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _FetchImageProvider &&
+      other.url == url &&
+      other.plain == plain &&
+      other.cacheWidth == cacheWidth;
+
+  @override
+  int get hashCode => Object.hash(url, plain, cacheWidth);
+
+  @override
+  String toString() =>
+      '${objectRuntimeType(this, "_FetchImageProvider")}("$url")';
 }
 
 /// 带 Referer / UA、失败自动降级的图片组件。
@@ -312,27 +412,23 @@ class _RemoteImageState extends State<RemoteImage> {
     );
   }
 
+  Widget _wrap(Widget child) =>
+      GestureDetector(onLongPress: _showDiagnostics, child: child);
+
   @override
   Widget build(BuildContext context) {
-    if (_attempts.isEmpty) {
-      return GestureDetector(
-        onLongPress: _showDiagnostics,
-        child: widget.placeholder(context),
-      );
-    }
-    if (_isDead) {
-      return GestureDetector(
-        onLongPress: _showDiagnostics,
-        child: widget.placeholder(context),
-      );
+    if (_attempts.isEmpty || _isDead) {
+      return _wrap(widget.placeholder(context));
     }
     final index = _index.clamp(0, _attempts.length - 1);
     final attempt = _attempts[index];
-    return Image.network(
-      attempt.url,
+    return Image(
+      image: _FetchImageProvider(
+        attempt.url,
+        plain: !attempt.withHeaders,
+        cacheWidth: widget.cacheWidth,
+      ),
       fit: widget.fit,
-      headers: attempt.useHeaders ? imageHeaders(attempt.url) : null,
-      cacheWidth: widget.cacheWidth,
       gaplessPlayback: true,
       // 加载中先占位，加载完直接显示，避免列表里出现「先空后跳」
       frameBuilder: (context, child, frame, wasSyncLoaded) {
@@ -340,21 +436,13 @@ class _RemoteImageState extends State<RemoteImage> {
           _watchdog?.cancel();
           return child;
         }
-        if (frame == null) {
-          return GestureDetector(
-            onLongPress: _showDiagnostics,
-            child: widget.placeholder(context),
-          );
-        }
+        if (frame == null) return _wrap(widget.placeholder(context));
         _watchdog?.cancel();
         return child;
       },
       errorBuilder: (context, error, stack) {
         _tryNext(error);
-        return GestureDetector(
-          onLongPress: _showDiagnostics,
-          child: widget.placeholder(context),
-        );
+        return _wrap(widget.placeholder(context));
       },
     );
   }
