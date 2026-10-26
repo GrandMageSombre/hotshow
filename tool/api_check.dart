@@ -58,6 +58,20 @@ void main() async {
     if (list.isEmpty) throw Exception('空数据');
   });
 
+  await step('全部·聚合流', () async {
+    final list = await svc.fetchAll(start: 0, count: 21);
+    print('  聚合流 ${list.length} 条，首条: ${list.first.title} (${list.first.rating})');
+    if (list.length < 10) throw Exception('聚合条数不足 ${list.length}');
+    final ids = list.map((e) => e.id).toSet();
+    if (ids.length != list.length) throw Exception('聚合流出现重复条目');
+  });
+
+  await step('全部·聚合流翻页', () async {
+    final list = await svc.fetchAll(start: 21, count: 21);
+    print('  聚合流第 2 页 ${list.length} 条，首条: ${list.isEmpty ? '-' : list.first.title}');
+    if (list.isEmpty) throw Exception('翻页无数据');
+  });
+
   ShowItem? first;
   await step('搜索「庆余年」', () async {
     final list = await svc.search('庆余年');

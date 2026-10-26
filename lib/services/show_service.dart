@@ -3,6 +3,7 @@ import 'api_client.dart';
 
 /// 首页大分类
 enum HotTab {
+  all('全部'),
   tv('电视剧'),
   shortDrama('短剧'),
   anime('动漫');
@@ -12,6 +13,7 @@ enum HotTab {
 }
 
 /// 大分类下的子榜单。sourceKind 决定走哪个接口：
+/// - all:       全分类聚合（把其它大分类的所有子榜单轮播交织成一列）
 /// - collection: rexxar subject_collection（编辑精选榜）
 /// - frodoTag:   frodo tv/recommend tags（标签聚合）
 class SubChannel {
@@ -22,6 +24,7 @@ class SubChannel {
 }
 
 const Map<HotTab, List<SubChannel>> kChannels = {
+  HotTab.all: [SubChannel('全部', 'all', 'all')],
   HotTab.tv: [
     SubChannel('热门', 'collection', 'tv_hot'),
     SubChannel('国产剧', 'collection', 'tv_domestic'),
@@ -42,6 +45,28 @@ const Map<HotTab, List<SubChannel>> kChannels = {
   ],
 };
 
+/// 把多份榜单按「轮播交织」合并成一列：第 i 轮取各榜单的第 i 条，
+/// 按 id 去重（保留首次出现），再切出 [start, start+count) 一页。
+/// 纯函数，便于单测。
+List<ShowItem> mergeShowPages(
+  List<List<ShowItem>> pages, {
+  int start = 0,
+  int count = 21,
+}) {
+  final maxLen = pages.fold<int>(0, (m, l) => l.length > m ? l.length : m);
+  final merged = <ShowItem>[];
+  final seen = <String>{};
+  for (var i = 0; i < maxLen; i++) {
+    for (final list in pages) {
+      if (i >= list.length) continue;
+      final item = list[i];
+      if (item.id.isNotEmpty && seen.add(item.id)) merged.add(item);
+    }
+  }
+  if (start >= merged.length) return const [];
+  return merged.skip(start).take(count).toList();
+}
+
 /// 业务数据层：榜单、搜索、详情。
 /// 不依赖 Flutter，可在纯 Dart 环境下运行（见 tool/api_check.dart）。
 class ShowService {
@@ -55,6 +80,9 @@ class ShowService {
     int start = 0,
     int count = 21,
   }) async {
+    if (channel.sourceKind == 'all') {
+      return fetchAll(start: start, count: count);
+    }
     if (channel.sourceKind == 'collection') {
       final data = await client.rexxarGet(
         '/subject_collection/${channel.sourceId}/items',
@@ -82,6 +110,28 @@ class ShowService {
           .toList();
       return list;
     }
+  }
+
+  /// 「全部」聚合流：把其它大分类的所有子榜单**轮播交织**成一列。
+  ///
+  /// 分页策略：请求第 [start] 页时，每个子榜单都从头取够
+  /// `(start + count) / 榜单数 + 1` 条（保证交织前缀逐页稳定），
+  /// 按 id 去重后切片，因此同一部剧不会重复出现。
+  /// 单个榜单失败只影响它自己（返回空列表），不拖垮整页。
+  Future<List<ShowItem>> fetchAll({int start = 0, int count = 21}) async {
+    final channels = <SubChannel>[
+      for (final entry in kChannels.entries)
+        if (entry.key != HotTab.all) ...entry.value,
+    ];
+    if (channels.isEmpty) return const [];
+    final per = (start + count) ~/ channels.length + 1;
+    final pages = await Future.wait([
+      for (final c in channels)
+        fetchHot(tab: HotTab.all, channel: c, start: 0, count: per)
+            .then<List<ShowItem>>((l) => l)
+            .catchError((Object _) => <ShowItem>[]),
+    ]);
+    return mergeShowPages(pages, start: start, count: count);
   }
 
   /// 关键词搜索（影视综合结果：电视剧/动漫/电影）
