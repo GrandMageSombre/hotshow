@@ -9,7 +9,8 @@
 
 | 功能 | 说明 |
 |------|------|
-| 📺 热播榜单 | 「全部」聚合流（全部分类的榜单轮播交织成一列，翻页去重）+ 电视剧（热门/国产剧/美剧/日剧/韩剧/综艺/纪录片）、短剧（热门短剧/网络剧）、动漫（热门动漫/日本动画/国漫） |
+| 📺 热播榜单 | 「全部」聚合流（全部分类的榜单轮播交织成一列，翻页去重）+ 电视剧（热门/国产剧/美剧/日剧/韩剧/综艺/纪录片）、短剧（热门短剧/网络剧）、动漫（热门动漫/日本动画/国漫/欧美动画） |
+| 🏷️ 类型分类 | 每个榜单页都有「类型」筛选条：电视剧/全部（喜剧/爱情/悬疑/犯罪/科幻/战争/古装/武侠/家庭/历史/动作/奇幻/青春/剧情/恐怖）、短剧（喜剧/爱情/古装/悬疑/甜宠/家庭/职场）、动漫（热血/战斗/冒险/治愈/搞笑/科幻/奇幻/悬疑/校园）；搜索页可一键按类型浏览；详情页的类型标签可点进该类型列表；采集站资源页还能按站点返回的 `type_name` 再筛一层 |
 | 🔄 实时更新 | 进入应用自动拉取最新榜单；每 10 分钟自动刷新当前页面；支持下拉刷新与手动刷新按钮；列表无限加载更多 |
 | 🔍 自主搜索 | 关键词实时搜索（输入 600ms 自动联想搜索），覆盖电视剧/短剧/动漫/电影，显示评分、年份、地区、演员 |
 | 🕘 历史记录 | 搜索历史（可单条删除/一键清空，点击直接重搜）+ 浏览历史（最近看过 100 条，点击回看详情），本地持久化存储 |
@@ -116,12 +117,13 @@ lib/
 ├── models/
 │   ├── show_item.dart         # 豆瓣影视条目/详情模型（三种来源 JSON 归一化）
 │   ├── media_resource.dart    # 采集站资源模型（线路 / 分集 / maccms 字段解析）
+│   ├── genre.dart             # 片源类型（Genre）+ 四张类型表（电视剧/短剧/动漫/搜索）
 │   ├── subtitle.dart          # 字幕搜索结果 / 本地字幕记录模型
 │   └── source_site.dart       # 采集站配置模型（纯 Dart，可 dart run 直用）
 ├── services/
 │   ├── api_client.dart        # HTTP 层：frodo 签名客户端 + rexxar 客户端 + 统一错误
 │   ├── remote_ua.dart         # 统一的浏览器 User-Agent（豆瓣图床/字幕站都认它）
-│   ├── show_service.dart      # 豆瓣业务层：榜单/搜索/详情（不依赖 Flutter，可单独测试）
+│   ├── show_service.dart      # 豆瓣业务层：榜单/类型/搜索/详情（不依赖 Flutter，可单独测试）
 │   ├── resource_service.dart  # 采集站检索层：多站并发搜索 + 片名匹配排序
 │   ├── source_store.dart      # 采集站配置持久化
 │   ├── source_discovery.dart  # 采集站自动发现：清单解析 + 并发探测
@@ -139,7 +141,8 @@ lib/
 │   └── history_store.dart     # 搜索历史 + 浏览历史（本地持久化）
 ├── pages/
 │   ├── home_page.dart         # 四个分类 Tab（全部/电视剧/短剧/动漫）+ 子榜单切换 + 实时刷新
-│   ├── search_page.dart       # 搜索页（防抖联想 + 搜索历史）
+│   ├── search_page.dart       # 搜索页（防抖联想 + 搜索历史 + 按类型浏览）
+│   ├── genre_page.dart        # 单个类型的列表页（详情页类型标签跳转）
 │   ├── history_page.dart      # 历史记录页
 │   ├── detail_page.dart       # 详情页
 │   ├── resource_page.dart     # 资源检索页（多站点聚合结果）
@@ -207,6 +210,8 @@ test/subtitle_test.dart        # 字幕编码/解包/偏移/存储 + 网格度�
 本项目已构建好发行版：
 
 ```
+releases/spgj-v1.4.0-android.apk       （94MB，全界面类型分类 + 动漫海报/国漫修复，versionCode 7）
+releases/spgj-v1.3.0-android.apk       （94.0MB，「全部」聚合分类）
 releases/spgj-v1.2.2-android.apk       （94.0MB，修复图片加载根因：双 User-Agent，versionCode 5）
 releases/spgj-v1.2.2-windows-x64.zip   （32.1MB，同上，解压后双击 hotshow.exe，含 VC++ 运行库）
 releases/spgj-v1.2.1-android.apk       （94.0MB，图片加载降级链 + 长按封面诊断）

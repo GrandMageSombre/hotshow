@@ -1,3 +1,4 @@
+import '../models/genre.dart';
 import '../models/show_item.dart';
 import 'api_client.dart';
 
@@ -16,10 +17,12 @@ enum HotTab {
 /// - all:       全分类聚合（把其它大分类的所有子榜单轮播交织成一列）
 /// - collection: rexxar subject_collection（编辑精选榜）
 /// - frodoTag:   frodo tv/recommend tags（标签聚合）
+/// - multiTag:  多个 tag 各自取一页再轮播交织（用于「国漫」这类单标签过少的分类，
+///              sourceId 用 `|` 分隔多个 tag）
 class SubChannel {
   final String label;
   final String sourceKind;
-  final String sourceId; // collection 名或 tag 名
+  final String sourceId; // collection 名 / tag 名 / tag1|tag2|tag3
   const SubChannel(this.label, this.sourceKind, this.sourceId);
 }
 
@@ -40,10 +43,26 @@ const Map<HotTab, List<SubChannel>> kChannels = {
   ],
   HotTab.anime: [
     SubChannel('热门动漫', 'collection', 'tv_animation'),
-    SubChannel('日本动画', 'frodoTag', '日本动画'),
-    SubChannel('国漫', 'frodoTag', '国漫'),
+    SubChannel('日本动画', 'frodoTag', '动画,日本'),
+    // 国漫单用「国漫」标签只有 3 条，合并三个同义标签后再交织去重
+    SubChannel('国漫', 'multiTag', '国产动画|国漫|中国动画'),
+    SubChannel('欧美动画', 'frodoTag', '动画,美国'),
   ],
 };
+
+/// 某大分类可用的「片源类型」。短剧/动漫各有专用标签前缀，
+/// 直接复用电视剧类型会串味（「古装」会返回长剧，「热血」会返回真人剧）。
+List<Genre> genresOf(HotTab tab) {
+  switch (tab) {
+    case HotTab.anime:
+      return kAnimeGenres;
+    case HotTab.shortDrama:
+      return kShortDramaGenres;
+    case HotTab.all:
+    case HotTab.tv:
+      return kTvGenres;
+  }
+}
 
 /// 把多份榜单按「轮播交织」合并成一列：第 i 轮取各榜单的第 i 条，
 /// 按 id 去重（保留首次出现），再切出 [start, start+count) 一页。
@@ -83,6 +102,24 @@ class ShowService {
     if (channel.sourceKind == 'all') {
       return fetchAll(start: start, count: count);
     }
+    if (channel.sourceKind == 'multiTag') {
+      final tags = channel.sourceId
+          .split('|')
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+      if (tags.isEmpty) return const [];
+      // 每个标签都从头取满一页：单标签可能只有 2~3 条（如「国漫」），
+      // 按 (start+count)/标签数 分摊会导致交织后凑不够一屏
+      final per = count;
+      final pages = await Future.wait([
+        for (final t in tags)
+          _tagFeed(t, start: 0, count: per)
+              .then<List<ShowItem>>((l) => l)
+              .catchError((Object _) => <ShowItem>[]),
+      ]);
+      return mergeShowPages(pages, start: start, count: count);
+    }
     if (channel.sourceKind == 'collection') {
       final data = await client.rexxarGet(
         '/subject_collection/${channel.sourceId}/items',
@@ -97,19 +134,68 @@ class ShowService {
       }
       return list;
     } else {
-      final data = await client.frodoGet('/api/v2/tv/recommend', {
-        'tags': channel.sourceId,
-        'start': '$start',
-        'count': '$count',
-        'sort': 'T',
-        'refresh': '0',
-      });
-      final list = (data['items'] as List? ?? [])
-          .map((e) => ShowItem.fromRecommendJson(e))
-          .whereType<ShowItem>()
-          .toList();
-      return list;
+      return _tagFeed(channel.sourceId, start: start, count: count);
     }
+  }
+
+  /// frodo 推荐流按标签取一页。分类（类型）与子榜单共用这条接口。
+  Future<List<ShowItem>> _tagFeed(
+    String tags, {
+    int start = 0,
+    int count = 21,
+  }) async {
+    final data = await client.frodoGet('/api/v2/tv/recommend', {
+      'tags': tags,
+      'start': '$start',
+      'count': '$count',
+      'sort': 'T',
+      'refresh': '0',
+    });
+    return (data['items'] as List? ?? [])
+        .map((e) => ShowItem.fromRecommendJson(e))
+        .whereType<ShowItem>()
+        .toList();
+  }
+
+  /// 按「片源类型」取一页数据；[Genre.isAll] 时回落成**该大分类下所有子榜单的交织**，
+  /// 而不是单个默认榜单 —— 否则「全部类型」只是「热门榜」的别名，名不副实。
+  Future<List<ShowItem>> fetchByGenre({
+    required HotTab tab,
+    required Genre genre,
+    int start = 0,
+    int count = 21,
+  }) {
+    if (!genre.isAll) return _tagFeed(genre.tag!, start: start, count: count);
+    if (tab == HotTab.all) return fetchAll(start: start, count: count);
+    return _mixChannels(tab, start: start, count: count);
+  }
+
+  /// 把某大分类下的所有子榜单轮播交织成一列（「全部类型」用）
+  Future<List<ShowItem>> _mixChannels(
+    HotTab tab, {
+    int start = 0,
+    int count = 21,
+  }) async {
+    final channels = kChannels[tab] ?? const <SubChannel>[];
+    if (channels.isEmpty) return const [];
+    if (channels.length == 1) {
+      return fetchHot(
+        tab: tab,
+        channel: channels.first,
+        start: start,
+        count: count,
+      );
+    }
+    final per = count > (start + count) ~/ channels.length + 1
+        ? count
+        : (start + count) ~/ channels.length + 1;
+    final pages = await Future.wait([
+      for (final c in channels)
+        fetchHot(tab: tab, channel: c, start: 0, count: per)
+            .then<List<ShowItem>>((l) => l)
+            .catchError((Object _) => <ShowItem>[]),
+    ]);
+    return mergeShowPages(pages, start: start, count: count);
   }
 
   /// 「全部」聚合流：把其它大分类的所有子榜单**轮播交织**成一列。

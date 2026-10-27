@@ -2,10 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/genre.dart';
 import '../models/show_item.dart';
 import '../services/history_store.dart';
 import '../services/show_service.dart';
 import '../widgets/common_views.dart';
+import '../widgets/genre_bar.dart';
 import '../widgets/show_card.dart';
 import '../widgets/show_grid.dart';
 
@@ -31,6 +33,12 @@ class _SearchPageState extends State<SearchPage> {
   bool _hasMore = true;
   int _start = 0;
   String _lastQuery = '';
+
+  /// 非空表示当前是「按类型浏览」而不是关键词搜索
+  Genre? _genre;
+
+  /// 分类请求代号，切类型/回到关键词时作废在途回包
+  int _request = 0;
 
   @override
   void initState() {
@@ -69,6 +77,8 @@ class _SearchPageState extends State<SearchPage> {
       });
       return;
     }
+    // 一旦开始输入关键词，就退出「按类型浏览」
+    if (_genre != null) setState(() => _genre = null);
     _debounce = Timer(const Duration(milliseconds: 600), _search);
   }
 
@@ -77,10 +87,66 @@ class _SearchPageState extends State<SearchPage> {
     _search(record: true);
   }
 
+  /// 点类型条：切到按类型浏览模式
+  void _selectGenre(Genre g) {
+    _debounce?.cancel();
+    _controller.clear();
+    _focus.unfocus();
+    setState(() {
+      _genre = g.isAll ? null : g;
+      _items = [];
+      _error = null;
+      _hasMore = true;
+      _start = 0;
+      _lastQuery = '';
+    });
+    if (_genre != null) _loadGenre(force: true);
+  }
+
+  Future<void> _loadGenre({bool force = false}) async {
+    final genre = _genre;
+    if (genre == null) return;
+    // force 允许打断在途请求（例如上一次搜索还在飞就点了类型）
+    if (!force && (_loading || !_hasMore)) return;
+    final req = ++_request;
+    final start = force ? 0 : _start;
+    setState(() {
+      _loading = true;
+      if (force) {
+        _error = null;
+        _items = [];
+        _start = 0;
+        _hasMore = true;
+      }
+    });
+    try {
+      final list = await _service.fetchByGenre(
+        tab: HotTab.tv,
+        genre: genre,
+        start: start,
+      );
+      if (!mounted || _genre != genre || req != _request) return;
+      setState(() {
+        _items = [..._items, ...list];
+        _start = start + list.length;
+        _hasMore = list.length >= 10;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted || req != _request) return;
+      setState(() {
+        _error = e;
+        _loading = false;
+        _hasMore = false;
+      });
+    }
+  }
+
   Future<void> _search({bool record = false}) async {
     final kw = _controller.text.trim();
     if (kw.isEmpty) return;
     _lastQuery = kw;
+    if (_genre != null) setState(() => _genre = null);
     setState(() {
       _loading = true;
       _error = null;
@@ -108,6 +174,7 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _loadMore() async {
+    if (_genre != null) return _loadGenre();
     if (_loading || !_hasMore || _items.isEmpty) return;
     final kw = _lastQuery;
     setState(() => _loading = true);
@@ -168,9 +235,42 @@ class _SearchPageState extends State<SearchPage> {
           ),
         ),
       ),
-      body: _controller.text.trim().isEmpty && _items.isEmpty
-          ? _buildSearchHistory()
-          : _buildResults(),
+      body: Column(
+        children: [
+          GenreBar(
+            genres: kSearchGenres,
+            selected: _genre ?? kGenreAll,
+            onSelected: _selectGenre,
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          ),
+          if (_genre != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 2, 16, 0),
+              child: Row(
+                children: [
+                  Icon(Icons.filter_alt_outlined,
+                      size: 14,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  const SizedBox(width: 4),
+                  Text(
+                    '正在按「${_genre!.label}」浏览 · 输入关键词可退出',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          Expanded(
+            child: (_genre == null &&
+                    _controller.text.trim().isEmpty &&
+                    _items.isEmpty)
+                ? _buildSearchHistory()
+                : _buildResults(),
+          ),
+        ],
+      ),
     );
   }
 
@@ -219,13 +319,22 @@ class _SearchPageState extends State<SearchPage> {
 
   Widget _buildResults() {
     if (_error != null && _items.isEmpty) {
-      return ErrorRetry(error: _error, onRetry: () => _search(record: false));
+      return ErrorRetry(
+        error: _error,
+        onRetry: () => _genre != null
+            ? _loadGenre(force: true)
+            : _search(record: false),
+      );
     }
     if (_loading && _items.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
     if (_items.isEmpty) {
-      return EmptyHint(message: '没有找到「${_controller.text.trim()}」相关的内容');
+      return EmptyHint(
+        message: _genre != null
+            ? '「${_genre!.label}」暂无内容，换个类型试试'
+            : '没有找到「${_controller.text.trim()}」相关的内容',
+      );
     }
     return LayoutBuilder(builder: (context, box) {
       final metrics = ShowGridMetrics.resolve(

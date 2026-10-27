@@ -50,3 +50,9 @@ releases/
 
 # AI 工具（Reasonix）的运行时任务目录
 .reasonix/
+
+# WorkBuddy 运行时（项目数据/记忆，不入库）
+.workbuddy/
+
+# Windows 重定向产生的空文件
+nul

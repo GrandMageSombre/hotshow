@@ -340,9 +340,11 @@ void main() {
       const url = 'http://img3.doubanio.com/view/photo/m_ratio_poster/public/p1.jpg';
       expect(normalizeImageUrl(url), startsWith('https://'));
       final candidates = imageCandidates(url);
-      expect(candidates.first, 'https://img3.doubanio.com/view/photo/m_ratio_poster/public/p1.jpg');
-      expect(candidates.length, 4);
-      expect(candidates[1], contains('img1.doubanio.com'));
+      // v1.4.0 起稳定海报地址（l_ratio_poster）排在最前，原始地址保留兜底
+      expect(candidates.first,
+          'https://img1.doubanio.com/view/photo/m_ratio_poster/public/p1.jpg');
+      expect(candidates.any((u) => u.contains('img3.doubanio.com')), isTrue);
+      expect(candidates.length, greaterThanOrEqualTo(4));
     });
 
     test('非豆瓣图源不换域名', () {

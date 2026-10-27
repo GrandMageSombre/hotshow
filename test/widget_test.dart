@@ -3,7 +3,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hotshow/main.dart';
+import 'package:hotshow/models/genre.dart';
 import 'package:hotshow/models/show_item.dart';
+import 'package:hotshow/pages/genre_page.dart';
 import 'package:hotshow/services/show_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -47,10 +49,67 @@ class FakeShowService extends ShowService {
       );
 }
 
+/// 记录分类请求，验证类型切换确实换了数据源
+class RecordingShowService extends FakeShowService {
+  final List<Genre> genreCalls = [];
+
+  @override
+  Future<List<ShowItem>> fetchByGenre({
+    required HotTab tab,
+    required Genre genre,
+    int start = 0,
+    int count = 21,
+  }) async {
+    genreCalls.add(genre);
+    return List.generate(
+      3,
+      (i) => ShowItem(
+        id: '${genre.tag}$start$i',
+        title: '${genre.label}片$i',
+        cover: '',
+        subtitle: '2024 / 测试',
+      ),
+    );
+  }
+}
+
+/// 第一个类型慢返回，用于验证快速切换时旧回包不会污染新列表
+class SlowGenreService extends FakeShowService {
+  @override
+  Future<List<ShowItem>> fetchByGenre({
+    required HotTab tab,
+    required Genre genre,
+    int start = 0,
+    int count = 21,
+  }) async {
+    if (genre.label == '喜剧') {
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+    }
+    return List.generate(
+      3,
+      (i) => ShowItem(
+        id: '${genre.tag}$start$i',
+        title: '${genre.label}片$i',
+        cover: '',
+        subtitle: '2024 / 测试',
+      ),
+    );
+  }
+}
+
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
   });
+
+  /// 按底部导航条里的文字点击（页内也可能有同名 chip，必须限定范围）
+  Future<void> tapNav(WidgetTester tester, String label) async {
+    await tester.tap(find.descendant(
+      of: find.byType(NavigationBar),
+      matching: find.text(label),
+    ));
+    await tester.pumpAndSettle();
+  }
 
   testWidgets('底部导航切换三个页面', (tester) async {
     await tester.pumpWidget(
@@ -61,20 +120,56 @@ void main() {
     // 首页加载了假榜单数据
     expect(find.textContaining('测试剧0'), findsWidgets);
 
-    await tester.tap(find.text('搜索'));
-    await tester.pumpAndSettle();
+    await tapNav(tester, '搜索');
     expect(find.byType(TextField), findsOneWidget);
     expect(find.text('搜索历史'), findsNothing); // 初始无历史
 
-    await tester.tap(find.text('历史'));
-    await tester.pumpAndSettle();
+    await tapNav(tester, '历史');
     expect(find.text('搜索历史'), findsNothing);
     expect(find.text('浏览历史'), findsNothing); // 空状态提示
     expect(find.textContaining('暂无历史记录'), findsOneWidget);
 
-    await tester.tap(find.text('热播'));
-    await tester.pumpAndSettle();
+    await tapNav(tester, '热播');
     expect(find.textContaining('测试剧0'), findsWidgets);
+  });
+
+  testWidgets('首页有类型筛选条，切类型会走分类接口', (tester) async {
+    final service = RecordingShowService();
+    await tester.pumpWidget(HotShowApp(service: service, autoRefresh: false));
+    await tester.pumpAndSettle();
+
+    expect(find.text('类型'), findsWidgets);
+    expect(find.text('喜剧'), findsWidgets);
+
+    await tester.tap(find.text('喜剧').first);
+    await tester.pumpAndSettle();
+
+    expect(service.genreCalls, isNotEmpty);
+    expect(service.genreCalls.last.label, '喜剧');
+    expect(find.textContaining('正在按「喜剧」浏览'), findsOneWidget);
+  });
+
+  testWidgets('分类页：切类型后旧请求的回包不会覆盖新列表', (tester) async {
+    // 第一个类型故意慢返回，模拟「网络慢时快速切类型」
+    final service = SlowGenreService();
+    await tester.pumpWidget(MaterialApp(
+      home: GenrePage(
+        tab: HotTab.tv,
+        genre: kTvGenres.firstWhere((g) => g.label == '喜剧'),
+        service: service,
+      ),
+    ));
+    await tester.pump();
+
+    await tester.tap(find.text('战争').first);
+    await tester.pump();
+
+    // 等两个请求都结束
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('战争片'), findsWidgets);
+    expect(find.textContaining('喜剧片'), findsNothing);
   });
 
   // 回归：354–377dp 这类宽度下，旧实现按两套公式算列数/卡片宽度，

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../models/genre.dart';
 import '../models/show_item.dart';
 import '../services/show_service.dart';
 import '../widgets/common_views.dart';
 import '../widgets/remote_image.dart';
+import 'genre_page.dart';
 import 'resource_page.dart';
 
 class DetailPage extends StatefulWidget {
@@ -125,6 +127,7 @@ class _DetailBody extends StatelessWidget {
                 height: 168,
                 child: RemoteImage(
                   url: item.cover,
+                  highQuality: true,
                   cacheWidth:
                       (120 * MediaQuery.devicePixelRatioOf(context)).round(),
                   placeholder: (_) => Container(
@@ -178,8 +181,22 @@ class _DetailBody extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   if (d.genres.isNotEmpty)
-                    Text('类型：${d.genres.join(' / ')}',
-                        style: const TextStyle(fontSize: 13)),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          const Text('类型：', style: TextStyle(fontSize: 13)),
+                          for (final g in d.genres)
+                            _GenreChip(
+                              label: g,
+                              onTap: () => _openGenre(context, g),
+                            ),
+                        ],
+                      ),
+                    ),
                   if (d.countries.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
@@ -262,6 +279,57 @@ class _DetailBody extends StatelessWidget {
                 style: const TextStyle(fontSize: 13, height: 1.4)),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 点类型标签 → 该类型片源列表；动漫条目走带 `动画` 前缀的标签，避免混进真人剧
+  void _openGenre(BuildContext context, String label) {
+    final text = detail.item.subtitle.isNotEmpty
+        ? detail.item.subtitle
+        : item.subtitle;
+    // 详情接口的 genres 最可靠；subtitle 兜底（形如 "2019 / 日本 / 动作 动画 奇幻"）
+    final anime = detail.genres.contains('动画') ||
+        text.contains('动画') ||
+        text.contains('动漫');
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => GenrePage(
+          tab: anime ? HotTab.anime : HotTab.tv,
+          genre: genreForLabel(label, anime: anime),
+        ),
+      ),
+    );
+  }
+}
+
+/// 详情页可点击的类型标签
+class _GenreChip extends StatelessWidget {
+  final String label;
+  final VoidCallback onTap;
+  const _GenreChip({required this.label, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+        decoration: BoxDecoration(
+          color: scheme.primary.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label,
+                style: TextStyle(fontSize: 12, color: scheme.primary)),
+            Icon(Icons.chevron_right_rounded, size: 14, color: scheme.primary),
+          ],
+        ),
       ),
     );
   }

@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/genre.dart';
 import '../models/show_item.dart';
 import '../services/show_service.dart';
 import '../widgets/common_views.dart';
+import '../widgets/genre_bar.dart';
 import '../widgets/show_card.dart';
 import '../widgets/show_grid.dart';
 
@@ -79,6 +81,9 @@ class _ChannelData {
   int start = 0;
   bool hasMore = true;
   DateTime updatedAt = DateTime.now();
+
+  /// 请求代号：刷新会自增，作废在途的旧回包（避免「慢请求后到」覆盖新榜单）
+  int seq = 0;
 }
 
 class _HotListView extends StatefulWidget {
@@ -103,11 +108,17 @@ class _HotListViewState extends State<_HotListView> {
   late final ShowService _service = widget.service ?? ShowService();
   final ScrollController _scroll = ScrollController();
   final Map<String, _ChannelData> _cache = {};
+  late final List<Genre> _genres = genresOf(widget.tab);
   late SubChannel _channel = kChannels[widget.tab]!.first;
+  late Genre _genre = _genres.first;
   Timer? _autoTimer;
 
+  /// 缓存键：榜单与类型各占一格，切回来不用重新请求
+  String get _cacheKey =>
+      _genre.isAll ? 'ch:${_channel.sourceId}' : 'g:${_genre.tag}';
+
   _ChannelData get _data =>
-      _cache.putIfAbsent(_channel.sourceId, () => _ChannelData());
+      _cache.putIfAbsent(_cacheKey, () => _ChannelData());
 
   @override
   void initState() {
@@ -142,7 +153,9 @@ class _HotListViewState extends State<_HotListView> {
 
   Future<void> _load({bool force = false}) async {
     final d = _data;
-    if (d.loading) return;
+    // 普通翻页要防重入；下拉刷新/刷新按钮允许打断
+    if (d.loading && !force) return;
+    final seq = force ? ++d.seq : d.seq;
     setState(() {
       d
         ..loading = true
@@ -155,12 +168,18 @@ class _HotListViewState extends State<_HotListView> {
       }
     });
     try {
-      final list = await _service.fetchHot(
-        tab: widget.tab,
-        channel: _channel,
-        start: d.start,
-      );
-      if (!mounted) return;
+      final list = _genre.isAll
+          ? await _service.fetchHot(
+              tab: widget.tab,
+              channel: _channel,
+              start: d.start,
+            )
+          : await _service.fetchByGenre(
+              tab: widget.tab,
+              genre: _genre,
+              start: d.start,
+            );
+      if (!mounted || seq != d.seq) return;
       setState(() {
         d
           ..loading = false
@@ -170,7 +189,7 @@ class _HotListViewState extends State<_HotListView> {
           ..updatedAt = DateTime.now();
       });
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || seq != d.seq) return;
       setState(() {
         d
           ..loading = false
@@ -189,7 +208,30 @@ class _HotListViewState extends State<_HotListView> {
   void _switchChannel(SubChannel c) {
     if (c == _channel) return;
     setState(() => _channel = c);
+    _trimCache();
     final d = _data;
+    if (d.items.isEmpty && d.error == null && !d.loading) {
+      _load(force: true);
+    }
+  }
+
+  /// 缓存上限：每个大分类最多留 12 个榜单/类型页，超了清掉最久未用的
+  void _trimCache() {
+    if (_cache.length <= 12) return;
+    final keep = _cacheKey;
+    final keys = _cache.keys.where((k) => k != keep).toList();
+    for (final k in keys) {
+      if (_cache.length <= 12) break;
+      _cache.remove(k);
+    }
+  }
+
+  void _switchGenre(Genre g) {
+    if (g == _genre) return;
+    setState(() => _genre = g);
+    _trimCache();
+    final d = _data;
+    if (_scroll.hasClients) _scroll.jumpTo(0);
     if (d.items.isEmpty && d.error == null && !d.loading) {
       _load(force: true);
     }
@@ -198,25 +240,56 @@ class _HotListViewState extends State<_HotListView> {
   @override
   Widget build(BuildContext context) {
     final d = _data;
+    final channels = kChannels[widget.tab]!;
     return Column(
       children: [
-        SizedBox(
-          height: 52,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            children: [
-              for (final c in kChannels[widget.tab]!)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    label: Text(c.label),
-                    selected: c == _channel,
-                    onSelected: (_) => _switchChannel(c),
+        // 选中具体类型时，榜单行让位给类型条，避免两排 chip 抢注意力
+        if (_genre.isAll)
+          SizedBox(
+            height: 52,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              children: [
+                for (final c in channels)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text(c.label),
+                      selected: c == _channel,
+                      onSelected: (_) => _switchChannel(c),
+                    ),
+                  ),
+              ],
+            ),
+          )
+        else
+          // 与榜单行同高（52），切类型时列表不会上下跳
+          SizedBox(
+            height: 52,
+            child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+            child: Row(
+              children: [
+                Icon(Icons.filter_alt_outlined,
+                    size: 15, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                const SizedBox(width: 4),
+                Text(
+                  '正在按「${_genre.label}」浏览',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
                 ),
-            ],
+              ],
+            ),
           ),
+          ),
+        GenreBar(
+          genres: _genres,
+          selected: _genre,
+          onSelected: _switchGenre,
+          padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
         ),
         Expanded(
           child: RefreshIndicator(
@@ -236,7 +309,9 @@ class _HotListViewState extends State<_HotListView> {
       return const Center(child: CircularProgressIndicator());
     }
     if (!d.loading && d.items.isEmpty) {
-      return const EmptyHint(message: '榜单暂无数据');
+      return EmptyHint(
+        message: _genre.isAll ? '榜单暂无数据' : '「${_genre.label}」暂无内容',
+      );
     }
     return LayoutBuilder(builder: (context, box) {
       final metrics = ShowGridMetrics.resolve(

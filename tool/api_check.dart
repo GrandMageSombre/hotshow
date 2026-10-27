@@ -2,6 +2,7 @@
 // 数据层集成测试：直接调用 ShowService 访问豆瓣真实接口。
 // 运行：dart run tool/api_check.dart
 // （无需 Flutter/模拟器，可在任何装有 Dart 的机器上验证数据源是否可用）
+import 'package:hotshow/models/genre.dart';
 import 'package:hotshow/models/show_item.dart';
 import 'package:hotshow/services/show_service.dart';
 
@@ -56,6 +57,70 @@ void main() async {
     final list = await svc.fetchHot(tab: HotTab.anime, channel: kChannels[HotTab.anime]![1]);
     print('  日本动画 ${list.length} 条，首条: ${list.first.title}');
     if (list.isEmpty) throw Exception('空数据');
+  });
+
+  await step('动漫·国漫（多标签合并）', () async {
+    final ch = kChannels[HotTab.anime]!.firstWhere((c) => c.label == '国漫');
+    final list = await svc.fetchHot(tab: HotTab.anime, channel: ch);
+    print('  国漫 ${list.length} 条，首条: ${list.isEmpty ? '-' : list.first.title}');
+    if (list.length < 10) throw Exception('国漫条数过少 ${list.length}');
+    final ids = list.map((e) => e.id).toSet();
+    if (ids.length != list.length) throw Exception('国漫出现重复条目');
+    if (list.any((e) => e.cover.contains('{'))) {
+      throw Exception('国漫封面仍是 {large: ...} 伪地址');
+    }
+  });
+
+  await step('动漫·欧美动画', () async {
+    final ch = kChannels[HotTab.anime]!.firstWhere((c) => c.label == '欧美动画');
+    final list = await svc.fetchHot(tab: HotTab.anime, channel: ch);
+    print('  欧美动画 ${list.length} 条，首条: ${list.isEmpty ? '-' : list.first.title}');
+    if (list.isEmpty) throw Exception('空数据');
+  });
+
+  await step('分类·电视剧「喜剧」', () async {
+    final genre = kTvGenres.firstWhere((g) => g.label == '喜剧');
+    final list = await svc.fetchByGenre(tab: HotTab.tv, genre: genre);
+    print('  喜剧 ${list.length} 条，首条: ${list.first.title}');
+    if (list.length < 10) throw Exception('条数不足');
+    if (list.any((e) => e.cover.contains('{'))) {
+      throw Exception('封面解析异常');
+    }
+  });
+
+  await step('分类·电视剧「战争」翻页', () async {
+    final genre = kTvGenres.firstWhere((g) => g.label == '战争');
+    final p1 = await svc.fetchByGenre(tab: HotTab.tv, genre: genre);
+    final p2 = await svc.fetchByGenre(tab: HotTab.tv, genre: genre, start: 21);
+    final ids1 = p1.map((e) => e.id).toSet();
+    final ids2 = p2.map((e) => e.id).toSet();
+    print('  第 1 页 ${p1.length} 条 / 第 2 页 ${p2.length} 条，重叠 ${ids1.intersection(ids2).length}');
+    if (p2.isEmpty) throw Exception('第 2 页无数据');
+  });
+
+  await step('分类·动漫「热血」', () async {
+    final genre = kAnimeGenres.firstWhere((g) => g.label == '热血');
+    final list = await svc.fetchByGenre(tab: HotTab.anime, genre: genre);
+    print('  动漫热血 ${list.length} 条，首条: ${list.first.title}');
+    if (list.length < 10) throw Exception('条数不足');
+  });
+
+  await step('分类·「全部」= 本大分类子榜单交织', () async {
+    final list = await svc.fetchByGenre(tab: HotTab.tv, genre: kGenreAll);
+    print('  电视剧全部 ${list.length} 条，首条: ${list.first.title}');
+    if (list.length < 20) throw Exception('交织条数不足 ${list.length}');
+    final ids = list.map((e) => e.id).toSet();
+    if (ids.length != list.length) throw Exception('交织出现重复');
+  });
+
+  await step('分类·短剧「古装」（短剧前缀不串味）', () async {
+    final genre = kShortDramaGenres.firstWhere((g) => g.label == '古装');
+    final list = await svc.fetchByGenre(tab: HotTab.shortDrama, genre: genre);
+    print('  短剧古装 ${list.length} 条，首条: ${list.first.title}');
+    if (list.length < 10) throw Exception('条数不足');
+    if (list.any((e) => e.title.contains('庆余年'))) {
+      throw Exception('短剧分类混进长剧');
+    }
   });
 
   await step('全部·聚合流', () async {

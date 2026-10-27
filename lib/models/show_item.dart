@@ -45,8 +45,18 @@ class ShowItem {
   }
 
   /// frodo tv/recommend feed 条目
+  ///
+  /// 注意：feed 里的封面字段有两种形态 ——
+  /// - `cover_url`: 字符串（部分条目才有）；
+  /// - `pic`: 对象 `{large: ..., normal: ...}`。
+  /// 早期实现直接 `pic.toString()`，会得到 `{large: https://…}` 这种伪地址，
+  /// 导致动漫等由 feed 提供的榜单**整屏海报都加载不出来**。
   static ShowItem? fromRecommendJson(Map<String, dynamic> j) {
-    if (j['item_type'] != null && j['item_type'] != 'tv') return null;
+    // 只排除明显不是影视条目的类型（广告/专栏）；动漫剧场版会以 movie 出现，不能误杀
+    final type = j['item_type'];
+    if (type is String && type.isNotEmpty && type != 'tv' && type != 'movie') {
+      return null;
+    }
     final uri = j['uri'] as String? ?? '';
     final id = _idFromUri(uri) ?? (j['id']?.toString() ?? '');
     final title = j['title'] as String?;
@@ -55,7 +65,7 @@ class ShowItem {
     return ShowItem(
       id: id,
       title: title,
-      cover: j['cover_url'] as String? ?? j['pic']?.toString() ?? '',
+      cover: pickCoverUrl(j['cover_url']) ?? pickCoverUrl(j['pic']) ?? '',
       rating: (rating?['value'] as num?)?.toDouble(),
       ratingCount: rating?['count'] as int?,
       subtitle: j['card_subtitle'] as String? ?? '',
@@ -86,6 +96,20 @@ class ShowItem {
   static String? _idFromUri(String uri) {
     final m = RegExp(r'/(?:tv|movie)/(\d+)').firstMatch(uri);
     return m?.group(1);
+  }
+
+  /// 归一化封面字段：字符串直接用，对象按 large → normal → small 取第一个非空。
+  /// 纯函数，便于单测。
+  static String? pickCoverUrl(dynamic raw) {
+    if (raw == null) return null;
+    if (raw is String) return raw.trim().isEmpty ? null : raw.trim();
+    if (raw is Map) {
+      for (final k in const ['large', 'normal', 'small', 'url', 'cover']) {
+        final v = raw[k];
+        if (v is String && v.trim().isNotEmpty) return v.trim();
+      }
+    }
+    return null;
   }
 
   Map<String, dynamic> toJson() => {

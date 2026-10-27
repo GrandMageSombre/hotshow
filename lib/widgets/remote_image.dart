@@ -49,6 +49,37 @@ String normalizeImageUrl(String raw) {
 bool _isDoubanHost(String host) =>
     host.endsWith('doubanio.com') || host.endsWith('douban.com');
 
+/// 豆瓣图片路径：`/view/photo/{尺寸}/public/p1234567890.jpg`
+/// 兼容 `p123.jpg.webp` 这类双扩展名（捕获主扩展名）
+final RegExp _doubanPhotoPath = RegExp(
+  r'/view/photo/[^/]+/public/(p\d+)(?:\.(jpg|jpeg|webp|png))?(?:\.[a-z0-9]+)?$',
+  caseSensitive: false,
+);
+
+/// 把任意豆瓣图片地址（含 `qnmob*-sign` 的**签名临时地址**）转成稳定地址。
+///
+/// 搜索接口返回的封面是带 `sa_cv/sa_ct` 签名的 CDN 地址，签名会过期；
+/// 过期后 WAF 直接 403/418 —— 表现为「过一会儿再看，动漫封面全白了」。
+/// 但路径里的 `p<id>` 是不变的，用它能拼出永不过期的 `img*.doubanio.com` 地址。
+/// 扩展名沿用原图（png 强制改成 jpg 可能 404），拿不到就按 jpg。
+///
+/// 尺寸默认取 `m_ratio_poster`（约 35~90KB）：列表一屏 20 张，用 `l_ratio_poster`
+/// （约 320KB）会让流量涨 3 倍多；详情页大图传 [large] 取 `l_ratio_poster`。
+List<String> stablePosterCandidates(String raw, {bool large = false}) {
+  final uri = Uri.tryParse(raw.trim());
+  if (uri == null || !uri.hasAuthority) return const [];
+  if (!_isDoubanHost(uri.host)) return const [];
+  final m = _doubanPhotoPath.firstMatch(uri.path);
+  if (m == null) return const [];
+  final id = m.group(1)!;
+  final ext = (m.group(2) ?? 'jpg').toLowerCase();
+  final size = large ? 'l_ratio_poster' : 'm_ratio_poster';
+  return [
+    for (final h in _doubanHosts)
+      'https://$h.doubanio.com/view/photo/$size/public/$id.$ext',
+  ];
+}
+
 /// 同一张图的候选地址：豆瓣图床按 img1→img2→img3→img9 轮询。
 List<String> imageCandidates(String raw) {
   final url = normalizeImageUrl(raw);
@@ -56,11 +87,15 @@ List<String> imageCandidates(String raw) {
   final uri = Uri.tryParse(url);
   if (uri == null || !_isDoubanHost(uri.host)) return [url];
   final host = uri.host.split('.').first;
-  if (!_doubanHosts.contains(host)) return [url];
-  final result = <String>[url];
+  final stable = stablePosterCandidates(url);
+  if (!_doubanHosts.contains(host)) {
+    return [...stable, url];
+  }
+  final result = <String>[...stable];
+  if (!result.contains(url)) result.add(url);
   for (final h in _doubanHosts) {
-    if (h == host) continue;
-    result.add(uri.replace(host: '$h.doubanio.com').toString());
+    final u = uri.replace(host: '$h.doubanio.com').toString();
+    if (!result.contains(u)) result.add(u);
   }
   return result;
 }
@@ -92,7 +127,7 @@ class _Attempt {
   String get label => withHeaders ? url : '$url（裸请求，无 UA/Referer）';
 }
 
-List<_Attempt> _attemptsFor(String raw) {
+List<_Attempt> _attemptsFor(String raw, {bool large = false}) {
   final url = normalizeImageUrl(raw);
   if (url.isEmpty) return const [];
   final uri = Uri.tryParse(url);
@@ -105,8 +140,19 @@ List<_Attempt> _attemptsFor(String raw) {
   }
 
   if (_isDoubanHost(uri.host)) {
-    for (final h in _doubanHosts) {
-      add(uri.replace(scheme: 'https', host: '$h.doubanio.com').toString(), true);
+    final stable = stablePosterCandidates(url, large: large);
+    if (stable.isNotEmpty) {
+      // 有稳定地址时只排 2 个镜像 + 原地址：四个域名是同一张图，
+      // 全排进链会让一张死图拖到一分多钟（每步 12s 看门狗）
+      for (final s in stable.take(2)) {
+        add(s, true);
+      }
+      add(url, true);
+    } else {
+      // 形如 /f/movie/ 的固定路径无法改写，按镜像轮询
+      for (final h in _doubanHosts) {
+        add(uri.replace(scheme: 'https', host: '$h.doubanio.com').toString(), true);
+      }
     }
     add(uri.replace(scheme: 'http').toString(), true);
     add(uri.replace(scheme: 'https').toString(), false);
@@ -219,12 +265,16 @@ class RemoteImage extends StatefulWidget {
   /// 解码尺寸（物理像素），传了可显著降低大图在手机上的内存占用
   final int? cacheWidth;
 
+  /// 详情页等大尺寸场景传 true，优先取 `l_ratio_poster` 大图
+  final bool highQuality;
+
   const RemoteImage({
     super.key,
     required this.url,
     required this.placeholder,
     this.fit = BoxFit.cover,
     this.cacheWidth,
+    this.highQuality = false,
   });
 
   @override
@@ -238,7 +288,10 @@ class _RemoteImageState extends State<RemoteImage> {
   static const Duration _deadTtl = Duration(minutes: 10);
   static const Duration _attemptTimeout = Duration(seconds: 12);
 
-  late List<_Attempt> _attempts = _attemptsFor(widget.url);
+  late List<_Attempt> _attempts = _attemptsFor(
+    widget.url,
+    large: widget.highQuality,
+  );
   int _index = 0;
 
   /// 换 item / 换地址时自增，用于作废上一张图排队中的重试回调
@@ -265,7 +318,7 @@ class _RemoteImageState extends State<RemoteImage> {
   void didUpdateWidget(RemoteImage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url) {
-      _attempts = _attemptsFor(widget.url);
+      _attempts = _attemptsFor(widget.url, large: widget.highQuality);
       _index = 0;
       _generation++;
       _advancing = false;

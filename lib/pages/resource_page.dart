@@ -41,6 +41,12 @@ class _ResourcePageState extends State<ResourcePage> {
   bool _loading = false;
   int _siteCount = 0;
 
+  /// 采集站资源类型筛选（空串 = 全部）
+  String _typeFilter = '';
+
+  /// 排序结果缓存：站点结果每来一批就失效一次，避免每个 build 重排全量
+  List<MediaResource>? _rankedCache;
+
   @override
   void initState() {
     super.initState();
@@ -57,7 +63,8 @@ class _ResourcePageState extends State<ResourcePage> {
   }
 
   void _onCacheChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() => _rankedCache = null);
   }
 
   void _search() {
@@ -65,21 +72,36 @@ class _ResourcePageState extends State<ResourcePage> {
     final sites = sourceStore.enabledSites;
     setState(() {
       _bySite.clear();
+      _rankedCache = null;
       _loading = sites.isNotEmpty;
       _siteCount = sites.length;
+      _typeFilter = '';
     });
     _sub = ResourceService.instance.searchAll(sites, _keyword).listen((r) {
       if (!mounted) return;
-      setState(() => _bySite[r.site.id] = r);
+      setState(() {
+        _bySite[r.site.id] = r;
+        _rankedCache = null;
+      });
     });
   }
 
-  /// 全部命中资源，按片名匹配度排序
-  List<MediaResource> get _ranked => rankResources(
+  /// 全部命中资源，按片名匹配度排序（带缓存）
+  List<MediaResource> get _ranked => _rankedCache ??= rankResources(
         _bySite.values.expand((r) => r.items),
         _keyword,
         year: widget.year,
       );
+
+  /// 采集站返回的资源类型（去重、稳定顺序），用于类型筛选条
+  List<String> _typesOf(List<MediaResource> all) {
+    final seen = <String>[];
+    for (final r in all) {
+      final t = r.typeName.trim();
+      if (t.isNotEmpty && !seen.contains(t)) seen.add(t);
+    }
+    return seen;
+  }
 
   int get _okSites => _bySite.values.where((r) => r.ok).length;
 
@@ -165,8 +187,13 @@ class _ResourcePageState extends State<ResourcePage> {
       return _NeedSites(onSettings: _openSettings, onDiscovery: _openDiscovery);
     }
 
-    final list = _ranked;
+    // 排序只做一次：_ranked 内部是排序+去重，反复调用在资源多时会有可感开销
+    final all = _ranked;
+    final list = _typeFilter.isEmpty
+        ? all
+        : all.where((r) => r.typeName.trim() == _typeFilter).toList();
     final failures = _failures;
+    final types = _typesOf(all);
 
     return RefreshIndicator(
       onRefresh: () async => _search(),
@@ -175,6 +202,7 @@ class _ResourcePageState extends State<ResourcePage> {
         padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
         children: [
           _statusBar(failures),
+          if (types.length > 1) _typeBar(types),
           if (list.isEmpty && _loading)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 60),
@@ -184,12 +212,57 @@ class _ResourcePageState extends State<ResourcePage> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 48),
               child: EmptyHint(
-                message: '各站点都没有找到「$_keyword」的资源\n可试试右上角换个关键词',
+                message: all.isEmpty
+                    ? '各站点都没有找到「$_keyword」的资源\n可试试右上角换个关键词'
+                    : '「$_typeFilter」类型下没有资源，可切回全部',
               ),
             )
           else
             for (final r in list) _resourceCard(r),
         ],
+      ),
+    );
+  }
+
+  /// 按采集站返回的 type_name 做二级筛选（动作片 / 喜剧片 / 动漫 …）
+  Widget _typeBar(List<String> types) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: SizedBox(
+        height: 38,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.category_outlined,
+                        size: 15, color: scheme.onSurfaceVariant),
+                    const SizedBox(width: 4),
+                    Text('类型',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+            ),
+            for (final t in ['', ...types])
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: ChoiceChip(
+                  label: Text(t.isEmpty ? '全部' : t),
+                  selected: _typeFilter == t,
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  labelStyle: const TextStyle(fontSize: 12),
+                  onSelected: (_) => setState(() => _typeFilter = t),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
