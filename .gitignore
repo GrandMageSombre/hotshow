@@ -56,3 +56,6 @@ releases/
 
 # Windows 重定向产生的空文件
 nul
+
+# Gradle 在 android/ 下产生的中间产物
+android/build/
