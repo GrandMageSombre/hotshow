@@ -2,6 +2,7 @@
 // 数据层集成测试：直接调用 ShowService 访问豆瓣真实接口。
 // 运行：dart run tool/api_check.dart
 // （无需 Flutter/模拟器，可在任何装有 Dart 的机器上验证数据源是否可用）
+import 'package:hotshow/models/facet.dart';
 import 'package:hotshow/models/genre.dart';
 import 'package:hotshow/models/show_item.dart';
 import 'package:hotshow/services/show_service.dart';
@@ -111,6 +112,65 @@ void main() async {
     if (list.length < 20) throw Exception('交织条数不足 ${list.length}');
     final ids = list.map((e) => e.id).toSet();
     if (ids.length != list.length) throw Exception('交织出现重复');
+  });
+
+  await step('电影·热门榜', () async {
+    final list = await svc.fetchHot(
+        tab: HotTab.movie, channel: kChannels[HotTab.movie]!.first);
+    print('  电影热门 ${list.length} 条，首条: ${list.isEmpty ? '-' : list.first.title}');
+    if (list.length < 10) throw Exception('条数不足');
+    if (list.any((e) => e.isTv)) throw Exception('电影榜出现剧集条目');
+    if (list.any((e) => e.cover.contains('{'))) throw Exception('封面解析异常');
+  });
+
+  await step('筛选·电视剧「喜剧」+ 美国 + 2024', () async {
+    final list = await svc.fetchFiltered(
+      tab: HotTab.tv,
+      selection: const FilterSelection(
+        genre: Genre('喜剧', '喜剧'),
+        area: FacetOption('美国', '美国'),
+        year: FacetOption('2024', '2024'),
+      ),
+    );
+    print('  喜剧·美国·2024 ${list.length} 条，首条: ${list.first.title}');
+    print('    ${list.first.subtitle}');
+    if (list.isEmpty) throw Exception('组合筛选无数据');
+  });
+
+  await step('筛选·电影「战争」+ 2024', () async {
+    final list = await svc.fetchFiltered(
+      tab: HotTab.movie,
+      selection: const FilterSelection(
+        genre: Genre('战争', '战争'),
+        year: FacetOption('2024', '2024'),
+      ),
+    );
+    print('  电影战争·2024 ${list.length} 条，首条: ${list.first.title}');
+    if (list.isEmpty) throw Exception('组合筛选无数据');
+  });
+
+  await step('筛选·「全部」+ 2024 同时包含剧集与电影', () async {
+    final list = await svc.fetchFiltered(
+      tab: HotTab.all,
+      selection: const FilterSelection(
+        year: FacetOption('2024', '2024'),
+      ),
+    );
+    final tv = list.where((e) => e.isTv).length;
+    final movie = list.where((e) => !e.isTv).length;
+    print('  2024 全部 ${list.length} 条（剧 $tv / 影 $movie），首条: ${list.first.title}');
+    if (tv == 0 || movie == 0) throw Exception('「全部」筛选没有同时覆盖剧和影');
+  });
+
+  await step('筛选·只选年份（类型=全部）', () async {
+    final list = await svc.fetchFiltered(
+      tab: HotTab.tv,
+      selection: const FilterSelection(
+        year: FacetOption('2025', '2025'),
+      ),
+    );
+    print('  2025 年剧集 ${list.length} 条，首条: ${list.first.title}');
+    if (list.length < 10) throw Exception('条数不足');
   });
 
   await step('分类·短剧「古装」（短剧前缀不串味）', () async {

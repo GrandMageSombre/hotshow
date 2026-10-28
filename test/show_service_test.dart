@@ -1,6 +1,7 @@
 // 「全部」聚合流的纯函数部分（mergeShowPages）单测 + 封面字段解析 / 类型映射。
 // 不访问网络。
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hotshow/models/facet.dart';
 import 'package:hotshow/models/genre.dart';
 import 'package:hotshow/models/show_item.dart';
 import 'package:hotshow/services/show_service.dart';
@@ -108,6 +109,31 @@ void main() {
     });
   });
 
+  group('筛选 tags 拼接（含域前缀补全）', () {
+    const onlyYear = FilterSelection(year: FacetOption('2024', '2024'));
+    test('短剧只选年份时补「短剧」前缀，避免放大成全部剧集', () {
+      expect(tagsForSelection(GenreScope.shortDrama, onlyYear), '短剧,2024');
+    });
+
+    test('动漫只选地区时补「动画」前缀', () {
+      const sel = FilterSelection(area: FacetOption('美国', '美国'));
+      expect(tagsForSelection(GenreScope.anime, sel), '动画,美国');
+    });
+
+    test('类型已带前缀时不重复加', () {
+      const sel = FilterSelection(
+        genre: Genre('古装', '短剧,古装'),
+        year: FacetOption('2024', '2024'),
+      );
+      expect(tagsForSelection(GenreScope.shortDrama, sel), '短剧,古装,2024');
+    });
+
+    test('电视剧/电影不加前缀', () {
+      expect(tagsForSelection(GenreScope.tv, onlyYear), '2024');
+      expect(tagsForSelection(GenreScope.movie, onlyYear), '2024');
+    });
+  });
+
   group('类型（分类）定义', () {
     test('动漫类型必须带「动画」前缀，否则会混进真人剧', () {
       for (final g in kAnimeGenres.where((g) => !g.isAll)) {
@@ -131,8 +157,10 @@ void main() {
 
     test('详情页类型名反查：动漫条目补 动画 前缀', () {
       expect(genreForLabel('科幻').tag, '科幻');
-      expect(genreForLabel('科幻', anime: true).tag, '动画,科幻');
-      expect(genreForLabel('武侠', anime: true).tag, '动画,武侠');
+      expect(genreForLabel('科幻', scope: GenreScope.anime).tag, '动画,科幻');
+      expect(genreForLabel('武侠', scope: GenreScope.anime).tag, '动画,武侠');
+      expect(genreForLabel('喜剧', scope: GenreScope.shortDrama).tag, '短剧,喜剧');
+      expect(genreForLabel('喜剧', scope: GenreScope.movie).tag, '喜剧');
     });
 
     test('「国漫」走 multiTag，单标签过少的问题由多源交织兜住', () {

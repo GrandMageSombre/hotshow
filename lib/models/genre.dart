@@ -1,10 +1,11 @@
 /// 片源类型（分类）定义。
 ///
-/// 每个 [Genre] 对应豆瓣 frodo 推荐流的 `tags` 参数：
-/// - 电视剧 / 短剧：直接传类型名，如 `喜剧`、`战争`；
-/// - 动漫：必须带 `动画` 前缀，如 `动画,热血`，否则会混进真人剧。
+/// 每个 [Genre] 对应豆瓣 frodo 推荐流的 `tags` 参数中的「类型」一段：
+/// - 电视剧 / 电影：直接传类型名，如 `喜剧`、`战争`；
+/// - 短剧：必须带 `短剧` 前缀（`短剧,古装`），否则返回的是长剧；
+/// - 动漫：必须带 `动画` 前缀（`动画,热血`），否则会混进真人剧。
 ///
-/// [tag] 为空表示「全部」，此时回落到该大分类的默认榜单接口。
+/// [tag] 为空表示「全部」，此时回落到该大分类的默认榜单/子榜单交织。
 class Genre {
   final String label;
   final String? tag;
@@ -26,7 +27,11 @@ class Genre {
 
 const Genre kGenreAll = Genre('全部');
 
-/// 电视剧 / 短剧 / 全部 共用的类型（已对接口实测，均有 20 条以上数据）
+/// 内容域：不同域的默认类型表、tag 前缀、取数接口都不同。
+/// 与首页大分类一一对应，但不依赖 UI 层枚举。
+enum GenreScope { tv, movie, shortDrama, anime }
+
+/// 电视剧 / 「全部」共用的类型（均已对接口实测，20 条以上）
 const List<Genre> kTvGenres = [
   kGenreAll,
   Genre('喜剧', '喜剧'),
@@ -44,6 +49,25 @@ const List<Genre> kTvGenres = [
   Genre('青春', '青春'),
   Genre('剧情', '剧情'),
   Genre('恐怖', '恐怖'),
+];
+
+/// 电影类型。电影走 `/api/v2/movie/recommend`，tag 不加前缀即可，
+/// 与地区/年份组合（`喜剧,2024`）实测有效。
+const List<Genre> kMovieGenres = [
+  kGenreAll,
+  Genre('喜剧', '喜剧'),
+  Genre('爱情', '爱情'),
+  Genre('动作', '动作'),
+  Genre('科幻', '科幻'),
+  Genre('悬疑', '悬疑'),
+  Genre('犯罪', '犯罪'),
+  Genre('战争', '战争'),
+  Genre('剧情', '剧情'),
+  Genre('动画', '动画'),
+  Genre('恐怖', '恐怖'),
+  Genre('奇幻', '奇幻'),
+  Genre('冒险', '冒险'),
+  Genre('纪录片', '纪录片'),
 ];
 
 /// 短剧专用类型。必须带 `短剧` 前缀 —— 直接用「古装」会返回《庆余年》这类长剧，
@@ -73,6 +97,20 @@ const List<Genre> kAnimeGenres = [
   Genre('校园', '动画,校园'),
 ];
 
+/// 某个内容域可用的类型表
+List<Genre> genresForScope(GenreScope scope) {
+  switch (scope) {
+    case GenreScope.anime:
+      return kAnimeGenres;
+    case GenreScope.shortDrama:
+      return kShortDramaGenres;
+    case GenreScope.movie:
+      return kMovieGenres;
+    case GenreScope.tv:
+      return kTvGenres;
+  }
+}
+
 /// 搜索页用的混合类型条：电视剧类型 + 动漫独有类型（热血/治愈/搞笑/校园），
 /// 让搜索页也能按动漫类型浏览，且不与电视剧类型重名。
 const List<Genre> kSearchGenres = [
@@ -84,11 +122,18 @@ const List<Genre> kSearchGenres = [
 ];
 
 /// 从详情页的类型名反查可跳转的 [Genre]。
-/// [anime] 为真时优先用动漫标签表，并补 `动画,` 前缀；都没有就按同名 tag 现造一个。
-Genre genreForLabel(String label, {bool anime = false}) {
-  final table = anime ? kAnimeGenres : kTvGenres;
-  for (final g in table) {
+/// 表里没有时按同名 tag 现造一条，并按 [scope] 补前缀。
+Genre genreForLabel(String label, {GenreScope scope = GenreScope.tv}) {
+  for (final g in genresForScope(scope)) {
     if (g.label == label && !g.isAll) return g;
   }
-  return Genre(label, anime ? '动画,$label' : label);
+  switch (scope) {
+    case GenreScope.anime:
+      return Genre(label, '动画,$label');
+    case GenreScope.shortDrama:
+      return Genre(label, '短剧,$label');
+    case GenreScope.tv:
+    case GenreScope.movie:
+      return Genre(label, label);
+  }
 }

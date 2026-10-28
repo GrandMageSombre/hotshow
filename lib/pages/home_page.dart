@@ -2,13 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../models/facet.dart';
 import '../models/genre.dart';
-import '../models/show_item.dart';
+import '../services/paged_show_list.dart';
 import '../services/show_service.dart';
-import '../widgets/common_views.dart';
+import '../widgets/facet_menu.dart';
 import '../widgets/genre_bar.dart';
-import '../widgets/show_card.dart';
-import '../widgets/show_grid.dart';
+import '../widgets/paged_show_grid.dart';
 
 class HomePage extends StatefulWidget {
   final ShowService? service;
@@ -21,7 +21,8 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin {
-  late final TabController _tab = TabController(length: HotTab.values.length, vsync: this);
+  late final TabController _tab =
+      TabController(length: HotTab.values.length, vsync: this);
   final List<GlobalKey<_HotListViewState>> _listKeys =
       HotTab.values.map((t) => GlobalKey<_HotListViewState>()).toList();
 
@@ -32,8 +33,7 @@ class _HomePageState extends State<HomePage>
   }
 
   void _refreshCurrent() {
-    final i = _tab.index;
-    _listKeys[i].currentState?.refresh();
+    _listKeys[_tab.index].currentState?.refresh();
   }
 
   @override
@@ -74,16 +74,10 @@ class _HomePageState extends State<HomePage>
   }
 }
 
-class _ChannelData {
-  List<ShowItem> items = [];
-  bool loading = false;
-  Object? error;
-  int start = 0;
-  bool hasMore = true;
+class _LoadedPage {
+  final PagedShowList list;
   DateTime updatedAt = DateTime.now();
-
-  /// 请求代号：刷新会自增，作废在途的旧回包（避免「慢请求后到」覆盖新榜单）
-  int seq = 0;
+  _LoadedPage(this.list);
 }
 
 class _HotListView extends StatefulWidget {
@@ -107,31 +101,65 @@ class _HotListView extends StatefulWidget {
 class _HotListViewState extends State<_HotListView> {
   late final ShowService _service = widget.service ?? ShowService();
   final ScrollController _scroll = ScrollController();
-  final Map<String, _ChannelData> _cache = {};
   late final List<Genre> _genres = genresOf(widget.tab);
+  late final List<FacetOption> _years = buildYears(DateTime.now().year);
   late SubChannel _channel = kChannels[widget.tab]!.first;
-  late Genre _genre = _genres.first;
+  FilterSelection _selection = const FilterSelection();
+
+  /// 每种「榜单 / 筛选组合」缓存一份分页状态，切回来不用重新请求
+  final Map<String, _LoadedPage> _cache = {};
+
+  late PagedShowList _list = _listFor(_selection, _channel);
   Timer? _autoTimer;
 
-  /// 缓存键：榜单与类型各占一格，切回来不用重新请求
-  String get _cacheKey =>
-      _genre.isAll ? 'ch:${_channel.sourceId}' : 'g:${_genre.tag}';
+  /// 上限：超过就丢掉最早缓存的（TabBarView 是常驻的，长期用会涨内存）
+  static const int _maxCache = 12;
 
-  _ChannelData get _data =>
-      _cache.putIfAbsent(_cacheKey, () => _ChannelData());
+  String _cacheKeyOf(FilterSelection sel, SubChannel ch) =>
+      sel.isAll ? 'ch:${ch.sourceId}' : 'f:${sel.key}';
+
+  PagedShowList _listFor(FilterSelection sel, SubChannel ch) {
+    final key = _cacheKeyOf(sel, ch);
+    final cached = _cache[key];
+    if (cached != null) return cached.list;
+    final list = PagedShowList(loader: (start) {
+      if (sel.isAll) {
+        return _service.fetchHot(tab: widget.tab, channel: ch, start: start);
+      }
+      return _service.fetchFiltered(
+        tab: widget.tab,
+        selection: sel,
+        start: start,
+      );
+    });
+    _cache[key] = _LoadedPage(list);
+    _trimCache(keepKey: key);
+    // 新组合先拉第一页（不 await，UI 先转圈）
+    list.reset();
+    return list;
+  }
+
+  void _trimCache({required String keepKey}) {
+    while (_cache.length > _maxCache) {
+      final victim =
+          _cache.keys.firstWhere((k) => k != keepKey, orElse: () => keepKey);
+      if (victim == keepKey) return;
+      _cache.remove(victim)?.list.dispose();
+    }
+  }
 
   @override
   void initState() {
     super.initState();
-    _load(force: true);
-    _scroll.addListener(_onScroll);
     if (widget.autoRefresh) {
-      // 每 10 分钟自动刷新当前可见榜单，保持“实时”
+      // 每 10 分钟自动刷新当前可见页，保持「实时」
       _autoTimer = Timer.periodic(const Duration(minutes: 10), (_) {
-        if (widget.isActive() &&
-            DateTime.now().difference(_data.updatedAt).inMinutes >= 5) {
-          _load(force: true);
-        }
+        if (!widget.isActive()) return;
+        final entry = _cache[_cacheKeyOf(_selection, _channel)];
+        if (entry == null) return;
+        if (DateTime.now().difference(entry.updatedAt).inMinutes < 5) return;
+        entry.updatedAt = DateTime.now();
+        entry.list.reset();
       });
     }
   }
@@ -139,112 +167,44 @@ class _HotListViewState extends State<_HotListView> {
   @override
   void dispose() {
     _autoTimer?.cancel();
-    _scroll.removeListener(_onScroll);
+    for (final entry in _cache.values) {
+      entry.list.dispose();
+    }
     _scroll.dispose();
     super.dispose();
   }
 
-  void _onScroll() {
-    if (_scroll.position.extentAfter < 400) _loadMore();
-  }
-
   /// 供首页 AppBar 刷新按钮调用
-  void refresh() => _load(force: true);
+  void refresh() {
+    final entry = _cache[_cacheKeyOf(_selection, _channel)];
+    entry?.updatedAt = DateTime.now();
+    (entry?.list ?? _list).reset();
+  }
 
-  Future<void> _load({bool force = false}) async {
-    final d = _data;
-    // 普通翻页要防重入；下拉刷新/刷新按钮允许打断
-    if (d.loading && !force) return;
-    final seq = force ? ++d.seq : d.seq;
+  void _apply(FilterSelection sel, {SubChannel? channel}) {
+    final ch = channel ?? _channel;
+    if (sel == _selection && ch == _channel) return;
     setState(() {
-      d
-        ..loading = true
-        ..error = null;
-      if (force) {
-        d
-          ..items = []
-          ..start = 0
-          ..hasMore = true;
-      }
+      _selection = sel;
+      _channel = ch;
+      _list = _listFor(sel, ch);
     });
-    try {
-      final list = _genre.isAll
-          ? await _service.fetchHot(
-              tab: widget.tab,
-              channel: _channel,
-              start: d.start,
-            )
-          : await _service.fetchByGenre(
-              tab: widget.tab,
-              genre: _genre,
-              start: d.start,
-            );
-      if (!mounted || seq != d.seq) return;
-      setState(() {
-        d
-          ..loading = false
-          ..items = force ? list : [...d.items, ...list]
-          ..start = d.start + list.length
-          ..hasMore = list.length >= 10
-          ..updatedAt = DateTime.now();
-      });
-    } catch (e) {
-      if (!mounted || seq != d.seq) return;
-      setState(() {
-        d
-          ..loading = false
-          ..error = e
-          ..hasMore = false;
-      });
-    }
-  }
-
-  void _loadMore() {
-    final d = _data;
-    if (d.loading || !d.hasMore || d.error != null || d.items.isEmpty) return;
-    _load();
-  }
-
-  void _switchChannel(SubChannel c) {
-    if (c == _channel) return;
-    setState(() => _channel = c);
-    _trimCache();
-    final d = _data;
-    if (d.items.isEmpty && d.error == null && !d.loading) {
-      _load(force: true);
-    }
-  }
-
-  /// 缓存上限：每个大分类最多留 12 个榜单/类型页，超了清掉最久未用的
-  void _trimCache() {
-    if (_cache.length <= 12) return;
-    final keep = _cacheKey;
-    final keys = _cache.keys.where((k) => k != keep).toList();
-    for (final k in keys) {
-      if (_cache.length <= 12) break;
-      _cache.remove(k);
-    }
-  }
-
-  void _switchGenre(Genre g) {
-    if (g == _genre) return;
-    setState(() => _genre = g);
-    _trimCache();
-    final d = _data;
     if (_scroll.hasClients) _scroll.jumpTo(0);
-    if (d.items.isEmpty && d.error == null && !d.loading) {
-      _load(force: true);
-    }
   }
+
+  void _selectGenre(Genre g) => _apply(_selection.copyWith(genre: g));
+
+  void _selectArea(FacetOption o) => _apply(_selection.copyWith(area: o));
+
+  void _selectYear(FacetOption o) => _apply(_selection.copyWith(year: o));
 
   @override
   Widget build(BuildContext context) {
-    final d = _data;
+    final scheme = Theme.of(context).colorScheme;
     final channels = kChannels[widget.tab]!;
     return Column(
       children: [
-        // 选中具体类型时，榜单行让位给类型条，避免两排 chip 抢注意力
-        if (_genre.isAll)
+        if (_selection.isAll)
           SizedBox(
             height: 52,
             child: ListView(
@@ -257,86 +217,65 @@ class _HotListViewState extends State<_HotListView> {
                     child: ChoiceChip(
                       label: Text(c.label),
                       selected: c == _channel,
-                      onSelected: (_) => _switchChannel(c),
+                      onSelected: (_) => _apply(_selection, channel: c),
                     ),
                   ),
               ],
             ),
-          )
-        else
-          // 与榜单行同高（52），切类型时列表不会上下跳
-          SizedBox(
-            height: 52,
-            child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-            child: Row(
-              children: [
-                Icon(Icons.filter_alt_outlined,
-                    size: 15, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                const SizedBox(width: 4),
-                Text(
-                  '正在按「${_genre.label}」浏览',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
           ),
         GenreBar(
           genres: _genres,
-          selected: _genre,
-          onSelected: _switchGenre,
-          padding: const EdgeInsets.fromLTRB(12, 2, 12, 2),
+          selected: _selection.genre,
+          onSelected: _selectGenre,
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+          child: Row(
+            children: [
+              FacetMenu(
+                label: '地区',
+                options: kAreas,
+                selected: _selection.area,
+                onSelected: _selectArea,
+              ),
+              const SizedBox(width: 8),
+              FacetMenu(
+                label: '年份',
+                options: _years,
+                selected: _selection.year,
+                onSelected: _selectYear,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  _selection.isAll
+                      ? '${_channel.label} · 全部类型'
+                      // 筛选态会隐藏榜单行，这里带上前缀，避免丢掉「在看哪个榜」的上下文
+                      : '正在看：${_selection.summary} · 来自「${_channel.label}」',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
         Expanded(
-          child: RefreshIndicator(
-            onRefresh: () async => _load(force: true),
-            child: _buildBody(d),
+          child: PagedShowGrid(
+            list: _list,
+            controller: _scroll,
+            // 走 refresh()：顺带更新 updatedAt，避免 10 分钟定时器刚下拉完又刷一次
+            onRefresh: () async => refresh(),
+            emptyMessage: _selection.isAll
+                ? '榜单暂无数据'
+                : '「${_selection.summary}」暂无内容，换个组合试试',
           ),
         ),
       ],
     );
-  }
-
-  Widget _buildBody(_ChannelData d) {
-    if (d.error != null && d.items.isEmpty) {
-      return ErrorRetry(error: d.error, onRetry: () => _load(force: true));
-    }
-    if (d.items.isEmpty && d.loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-    if (!d.loading && d.items.isEmpty) {
-      return EmptyHint(
-        message: _genre.isAll ? '榜单暂无数据' : '「${_genre.label}」暂无内容',
-      );
-    }
-    return LayoutBuilder(builder: (context, box) {
-      final metrics = ShowGridMetrics.resolve(
-        availableWidth:
-            box.maxWidth - ShowGridMetrics.horizontalPadding * 2,
-        textScaler: MediaQuery.textScalerOf(context),
-      );
-      return GridView.builder(
-        controller: _scroll,
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(
-          ShowGridMetrics.horizontalPadding,
-          4,
-          ShowGridMetrics.horizontalPadding,
-          12,
-        ),
-        gridDelegate: metrics.delegate(),
-        itemCount: d.items.length + 1,
-        itemBuilder: (context, i) {
-          if (i >= d.items.length) {
-            return ListTail(hasMore: d.hasMore || d.loading);
-          }
-          return ShowCard(item: d.items[i]);
-        },
-      );
-    });
   }
 }

@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hotshow/main.dart';
+import 'package:hotshow/models/facet.dart';
 import 'package:hotshow/models/genre.dart';
 import 'package:hotshow/models/show_item.dart';
 import 'package:hotshow/pages/genre_page.dart';
@@ -51,21 +52,24 @@ class FakeShowService extends ShowService {
 
 /// 记录分类请求，验证类型切换确实换了数据源
 class RecordingShowService extends FakeShowService {
-  final List<Genre> genreCalls = [];
+  final List<FilterSelection> filterCalls = [];
+
+  List<Genre> get genreCalls =>
+      [for (final s in filterCalls) Genre(s.genreLabel, s.genreTag)];
 
   @override
-  Future<List<ShowItem>> fetchByGenre({
+  Future<List<ShowItem>> fetchFiltered({
     required HotTab tab,
-    required Genre genre,
+    required FilterSelection selection,
     int start = 0,
     int count = 21,
   }) async {
-    genreCalls.add(genre);
+    filterCalls.add(selection);
     return List.generate(
       3,
       (i) => ShowItem(
-        id: '${genre.tag}$start$i',
-        title: '${genre.label}片$i',
+        id: '${selection.tags}$start$i',
+        title: '${selection.genreLabel}片$i',
         cover: '',
         subtitle: '2024 / 测试',
       ),
@@ -76,20 +80,20 @@ class RecordingShowService extends FakeShowService {
 /// 第一个类型慢返回，用于验证快速切换时旧回包不会污染新列表
 class SlowGenreService extends FakeShowService {
   @override
-  Future<List<ShowItem>> fetchByGenre({
+  Future<List<ShowItem>> fetchFiltered({
     required HotTab tab,
-    required Genre genre,
+    required FilterSelection selection,
     int start = 0,
     int count = 21,
   }) async {
-    if (genre.label == '喜剧') {
+    if (selection.genreLabel == '喜剧') {
       await Future<void>.delayed(const Duration(milliseconds: 600));
     }
     return List.generate(
       3,
       (i) => ShowItem(
-        id: '${genre.tag}$start$i',
-        title: '${genre.label}片$i',
+        id: '${selection.tags}$start$i',
+        title: '${selection.genreLabel}片$i',
         cover: '',
         subtitle: '2024 / 测试',
       ),
@@ -146,7 +150,39 @@ void main() {
 
     expect(service.genreCalls, isNotEmpty);
     expect(service.genreCalls.last.label, '喜剧');
-    expect(find.textContaining('正在按「喜剧」浏览'), findsOneWidget);
+    expect(find.textContaining('正在看：喜剧'), findsOneWidget);
+    // 地区/年份维度也在
+    expect(find.text('地区'), findsWidgets);
+    expect(find.text('年份'), findsWidgets);
+  });
+
+  testWidgets('选地区会带上地区 tag，文案同步更新', (tester) async {
+    final service = RecordingShowService();
+    await tester.pumpWidget(HotShowApp(service: service, autoRefresh: false));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('地区').first);
+    await tester.pumpAndSettle();
+    // 菜单里的「中国大陆」（列表里可能还有同名词条，取菜单项）
+    await tester.tap(find.text('中国大陆').last);
+    await tester.pumpAndSettle();
+
+    expect(service.filterCalls, isNotEmpty);
+    expect(service.filterCalls.last.area.tag, '中国大陆');
+    expect(find.textContaining('中国大陆'), findsWidgets);
+  });
+
+  testWidgets('电影 Tab 有 5 个子榜单且能渲染网格', (tester) async {
+    final service = RecordingShowService();
+    await tester.pumpWidget(HotShowApp(service: service, autoRefresh: false));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('电影').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('正在上映'), findsWidgets);
+    expect(find.text('TOP250'), findsWidgets);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('分类页：切类型后旧请求的回包不会覆盖新列表', (tester) async {

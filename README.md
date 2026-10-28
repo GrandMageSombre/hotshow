@@ -1,18 +1,18 @@
 # 热剧速览 (HotShow)
 
-实时热播 **电视剧 / 短剧 / 动漫** 聚合搜索应用，一套 Flutter 代码同时支持 **Windows** 和 **Android**。
+实时热播 **电视剧 / 电影 / 短剧 / 动漫** 聚合搜索应用，一套 Flutter 代码同时支持 **Windows / Android / macOS**。
 发现好剧 → 一键检索完整片源 → 内置播放器直接看，支持选集、倍速与离线缓存。
 
-![平台](https://img.shields.io/badge/平台-Windows%20%7C%20Android-blue) ![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter)
+![平台](https://img.shields.io/badge/平台-Windows%20%7C%20Android%20%7C%20macOS-blue) ![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter)
 
 ## 功能
 
 | 功能 | 说明 |
 |------|------|
-| 📺 热播榜单 | 「全部」聚合流（全部分类的榜单轮播交织成一列，翻页去重）+ 电视剧（热门/国产剧/美剧/日剧/韩剧/综艺/纪录片）、短剧（热门短剧/网络剧）、动漫（热门动漫/日本动画/国漫/欧美动画） |
-| 🏷️ 类型分类 | 每个榜单页都有「类型」筛选条：电视剧/全部（喜剧/爱情/悬疑/犯罪/科幻/战争/古装/武侠/家庭/历史/动作/奇幻/青春/剧情/恐怖）、短剧（喜剧/爱情/古装/悬疑/甜宠/家庭/职场）、动漫（热血/战斗/冒险/治愈/搞笑/科幻/奇幻/悬疑/校园）；搜索页可一键按类型浏览；详情页的类型标签可点进该类型列表；采集站资源页还能按站点返回的 `type_name` 再筛一层 |
+| 📺 热播榜单 | 「全部」聚合流（全部分类的榜单轮播交织成一列，翻页去重）+ 电视剧（热门/国产剧/美剧/日剧/韩剧/综艺/纪录片）、**电影**（热门/正在上映/即将上映/TOP250/口碑榜）、短剧（热门短剧/网络剧）、动漫（热门动漫/日本动画/国漫/欧美动画） |
+| 🏷️ 多维筛选 | 「类型 + 地区 + 年份」三级筛选，参数以豆瓣 `tags` 逗号组合传给接口：电视剧/全部（喜剧/战争/古装…16 种）、电影（喜剧/动作/科幻/战争…14 种）、短剧（短剧专属池：古装/甜宠/职场…）、动漫（热血/治愈/搞笑/校园…）；地区含中国大陆/美国/日本/韩国等 8 个，年份近 12 年。筛选组合如「喜剧 · 美国 · 2024」「短剧 · 古装 · 2024」均实测有效 |
 | 🔄 实时更新 | 进入应用自动拉取最新榜单；每 10 分钟自动刷新当前页面；支持下拉刷新与手动刷新按钮；列表无限加载更多 |
-| 🔍 自主搜索 | 关键词实时搜索（输入 600ms 自动联想搜索），覆盖电视剧/短剧/动漫/电影，显示评分、年份、地区、演员 |
+| 🔍 自主搜索 | 关键词实时搜索（输入 600ms 自动联想搜索），覆盖电视剧/电影/短剧/动漫，显示评分、年份、地区、演员；也可直接点类型条按类型浏览 |
 | 🕘 历史记录 | 搜索历史（可单条删除/一键清空，点击直接重搜）+ 浏览历史（最近看过 100 条，点击回看详情），本地持久化存储 |
 | ℹ️ 详情页 | 海报、评分、类型/地区/首播/集数、导演/主演、剧情简介、豆瓣热门短评，一键跳转豆瓣网页 |
 | ▶️ 在线播放 | 详情页一键到已配置的采集站检索「完整资源」（多线路 / 全集），内置 media_kit（libmpv）播放器：选集、切线路、倍速、全屏、自动连播 |
@@ -117,13 +117,15 @@ lib/
 ├── models/
 │   ├── show_item.dart         # 豆瓣影视条目/详情模型（三种来源 JSON 归一化）
 │   ├── media_resource.dart    # 采集站资源模型（线路 / 分集 / maccms 字段解析）
-│   ├── genre.dart             # 片源类型（Genre）+ 四张类型表（电视剧/短剧/动漫/搜索）
+│   ├── genre.dart             # 片源类型（Genre）+ 四张类型表（电视剧/电影/短剧/动漫）
+│   ├── facet.dart             # 多维筛选（FilterSelection：类型/地区/年份 → tags）
 │   ├── subtitle.dart          # 字幕搜索结果 / 本地字幕记录模型
 │   └── source_site.dart       # 采集站配置模型（纯 Dart，可 dart run 直用）
 ├── services/
 │   ├── api_client.dart        # HTTP 层：frodo 签名客户端 + rexxar 客户端 + 统一错误
 │   ├── remote_ua.dart         # 统一的浏览器 User-Agent（豆瓣图床/字幕站都认它）
-│   ├── show_service.dart      # 豆瓣业务层：榜单/类型/搜索/详情（不依赖 Flutter，可单独测试）
+│   ├── show_service.dart      # 豆瓣业务层：榜单/筛选/搜索/详情（不依赖 Flutter，可单独测试）
+│   ├── paged_show_list.dart   # 筛选+分页状态机（三个列表页共用，带请求代号）
 │   ├── resource_service.dart  # 采集站检索层：多站并发搜索 + 片名匹配排序
 │   ├── source_store.dart      # 采集站配置持久化
 │   ├── source_discovery.dart  # 采集站自动发现：清单解析 + 并发探测
@@ -142,7 +144,7 @@ lib/
 ├── pages/
 │   ├── home_page.dart         # 四个分类 Tab（全部/电视剧/短剧/动漫）+ 子榜单切换 + 实时刷新
 │   ├── search_page.dart       # 搜索页（防抖联想 + 搜索历史 + 按类型浏览）
-│   ├── genre_page.dart        # 单个类型的列表页（详情页类型标签跳转）
+│   ├── genre_page.dart        # 单个类型的列表页（详情页类型标签跳转，可再筛地区/年份）
 │   ├── history_page.dart      # 历史记录页
 │   ├── detail_page.dart       # 详情页
 │   ├── resource_page.dart     # 资源检索页（多站点聚合结果）
@@ -210,6 +212,7 @@ test/subtitle_test.dart        # 字幕编码/解包/偏移/存储 + 网格度�
 本项目已构建好发行版：
 
 ```
+releases/spgj-v1.5.0-android.apk       （94MB，电影分类 + 类型/地区/年份筛选 + macOS 平台，versionCode 8）
 releases/spgj-v1.4.0-android.apk       （94MB，全界面类型分类 + 动漫海报/国漫修复，versionCode 7）
 releases/spgj-v1.3.0-android.apk       （94.0MB，「全部」聚合分类）
 releases/spgj-v1.2.2-android.apk       （94.0MB，修复图片加载根因：双 User-Agent，versionCode 5）
@@ -338,6 +341,40 @@ flutter build windows --release
 ```
 
 分发时把 `Release` 目录整个打包（内含 dll 与 data 目录）。窗口标题与默认尺寸在 `windows/runner/main.cpp` 中调整。
+
+### 构建 macOS 版
+
+**必须在 macOS 上构建**（Xcode 工具链无法在 Windows 上运行）。仓库里已含 `macos/` 工程，
+无需再 `flutter create`。
+
+1. 装 Xcode（15+，含命令行工具：`xcode-select --install`）；
+2. 在项目根目录执行：
+
+```bash
+flutter pub get
+flutter build macos --release
+```
+
+产物：`build/macos/Build/Products/Release/HotShow.app`（可直接拖进「应用程序」）。
+
+已为本项目改好的 macOS 配置（如换机器重新 `flutter create` 注意保留）：
+
+| 文件 | 改动 | 原因 |
+|------|------|------|
+| `macos/Runner/DebugProfile.entitlements` / `Release.entitlements` | 增加 `com.apple.security.network.client` | App Sandbox 默认**禁止出网**，不加则所有接口/海报都请求失败 |
+| `macos/Runner/Info.plist` | `NSAppTransportSecurity.NSAllowsArbitraryLoads = true` | 采集站大量是 http 明文接口，ATS 默认拦截 |
+| `macos/Runner/Info.plist` | `CFBundleDisplayName = 热剧速览` | 程序坞/访达显示中文名 |
+| `macos/Runner/Configs/AppInfo.xcconfig` | `PRODUCT_NAME = HotShow` | 可执行文件名（保持 ASCII） |
+| `macos/Runner/MainFlutterWindow.swift` | 初始 1100×760、最小 900×640 | 桌面版按手机宽度开局会只剩两列海报 |
+
+分发说明：
+
+- 本地自用：`flutter build macos --release` 后直接运行，无需签名；
+- 分发给别人：需要 Apple Developer 账号做 **Developer ID 签名 + 公证（notarization）**，
+  否则对方首次打开会被 Gatekeeper 拦（右键「打开」可绕过）。
+  `NSAllowsArbitraryLoads` 只影响 App Store 审核，**Developer ID 直接分发不受此限制**。
+- 应用图标：`macos/Runner/Assets.xcassets/AppIcon.appiconset/` 目前是 Flutter 默认图标，
+  换图标需要 `AppIcon.icns`（macOS 上用 `iconutil` 从 png 集合生成）。
 
 ### 构建 Android APK
 

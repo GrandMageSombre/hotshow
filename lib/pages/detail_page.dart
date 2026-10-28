@@ -292,12 +292,22 @@ class _DetailBody extends StatelessWidget {
     final anime = detail.genres.contains('动画') ||
         text.contains('动画') ||
         text.contains('动漫');
+    // 电影条目走 movie 接口；动漫走带「动画,」前缀的标签，其余按剧集处理
+    final scope = !item.isTv
+        ? GenreScope.movie
+        : (anime ? GenreScope.anime : GenreScope.tv);
+    final tab = switch (scope) {
+      GenreScope.movie => HotTab.movie,
+      GenreScope.anime => HotTab.anime,
+      GenreScope.shortDrama => HotTab.shortDrama,
+      GenreScope.tv => HotTab.tv,
+    };
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => GenrePage(
-          tab: anime ? HotTab.anime : HotTab.tv,
-          genre: genreForLabel(label, anime: anime),
+          tab: tab,
+          genre: genreForLabel(label, scope: scope),
         ),
       ),
     );
