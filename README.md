@@ -1,9 +1,9 @@
 # 热剧速览 (HotShow)
 
-实时热播 **电视剧 / 电影 / 短剧 / 动漫** 聚合搜索应用，一套 Flutter 代码同时支持 **Windows / Android / macOS**。
+实时热播 **电视剧 / 电影 / 短剧 / 动漫** 聚合搜索应用，一套 Flutter 代码同时支持 **Windows / Android / macOS / iOS**。
 发现好剧 → 一键检索完整片源 → 内置播放器直接看，支持选集、倍速与离线缓存。
 
-![平台](https://img.shields.io/badge/平台-Windows%20%7C%20Android%20%7C%20macOS-blue) ![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter)
+![平台](https://img.shields.io/badge/平台-Windows%20%7C%20Android%20%7C%20macOS%20%7C%20iOS-blue) ![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter)
 
 ## 功能
 
@@ -24,7 +24,7 @@
 
 ## 技术实现
 
-- **框架**: Flutter (Material 3)，单代码库 → Android APK + Windows EXE
+- **框架**: Flutter (Material 3)，单代码库 → Android APK / Windows EXE / macOS .app / iOS（自签）
 - **元数据源**: 豆瓣公开数据（未官方授权，仅供学习）
   - 榜单：`m.douban.com/rexxar/api/v2/subject_collection/*`（网页端集合接口）
   - 短剧/网剧/动漫标签聚合：`frodo.douban.com/api/v2/tv/recommend`（App 端接口，HMAC-SHA1 请求签名）
@@ -347,6 +347,10 @@ flutter build windows --release
 **必须在 macOS 上构建**（Xcode 工具链无法在 Windows 上运行）。仓库里已含 `macos/` 工程，
 无需再 `flutter create`。
 
+> iOS 也是同样限制，但 iOS 可以**把编译外包给 GitHub 的免费 macOS runner**，
+> Windows 只负责签名安装 —— 见下一节「在 iPhone 上运行」。macOS 桌面版目前没有这种托管编译，
+> 只能在 Mac 上出包。
+
 1. 装 Xcode（15+，含命令行工具：`xcode-select --install`）；
 2. 在项目根目录执行：
 
@@ -375,6 +379,63 @@ flutter build macos --release
   `NSAllowsArbitraryLoads` 只影响 App Store 审核，**Developer ID 直接分发不受此限制**。
 - 应用图标：`macos/Runner/Assets.xcassets/AppIcon.appiconset/` 目前是 Flutter 默认图标，
   换图标需要 `AppIcon.icns`（macOS 上用 `iconutil` 从 png 集合生成）。
+
+### 在 iPhone 上运行（没有 Mac 也能装）
+
+**硬限制**：iOS 应用必须在 macOS 上编译（Xcode 只能在 Mac 跑），
+但**签名和安装可以在 Windows 上完成**。所以只需要一台 Windows 电脑 + iPhone。
+
+仓库已带工作流 `.github/workflows/ios-unsigned-ipa.yml`：用 GitHub 免费的 macOS runner
+编出**未签名 .ipa**，你在本机用自己的 Apple ID 签名安装。
+
+1. **出包**：GitHub 仓库 → **Actions** → 左侧 `Build unsigned iOS IPA` → **Run workflow**；
+   约 5~10 分钟（首次要下载 Flutter SDK，之后有缓存会快很多）后，在运行详情页底部下载 **`hotshow-unsigned-ipa.zip`** → **先解压**，
+   里面那个 `hotshow-unsigned.ipa` 才是要拖进 Sideloadly 的文件（直接把 zip 拖进去会失败）。
+   也可以在本地打 tag 推送（`git tag v1.6.0 && git push origin v1.6.0`）自动触发。
+2. **装工具**（Windows）：Sideloadly 需要 Apple 的「Apple Mobile Device」驱动，二选一即可 ——
+   Win11/10 装微软商店的 **Apple Devices**（更轻），或装 [iTunes](https://www.apple.com/itunes/)；
+   再装 [Sideloadly](https://sideloadly.io/)。首次运行建议用管理员权限（装驱动）。
+3. **签名安装**：iPhone 用数据线连电脑并在手机上点「信任」→ 打开 Sideloadly →
+   把 `hotshow-unsigned.ipa` 拖进去 → 填自己的 Apple ID（普通账号即可）→ Start。
+4. **信任证书**：iPhone → 设置 → 通用 → VPN 与设备管理 → 开发者 App → 信任你的 Apple ID。
+5. 桌面上就有「热剧速览」了。
+
+**免费 Apple ID 的限制**（重要）：
+
+| 项目 | 免费账号 | 付费开发者账号（$99/年） |
+|------|----------|--------------------------|
+| 有效期 | **7 天**，过期打不开，需重新签名 | 1 年 |
+| 同时安装 | 最多 3 个自签 App | 100 台设备 |
+| 续签 | 每 7 天用同一台电脑重签（[AltStore](https://altstore.io/) 需电脑上常驻 AltServer 且同一 Wi-Fi，约 1~3 天唤醒一次才能自动续） | 不用 |
+| 分发 | 只能装自己手机，**不支持 TestFlight** | 可用 TestFlight 邀请他人（90 天一轮） |
+
+> 如果你的 iPhone 上没有电脑可用：iOS 不允许纯手机侧载，必须借一台 Windows/Mac
+> （或云 Mac）完成一次签名安装，之后每 7 天仍需连一次同一台电脑重签。
+
+**iOS 16 及以上必须先开「开发者模式」**：装完第一次点开若提示「需要开发者模式」，
+到 iPhone → 设置 → 隐私与安全性 → 开发者模式 → 打开并重启手机（这个开关只有连过
+Xcode/Sideloadly 之后才会出现）。
+
+**常见问题**
+
+| 现象 | 原因 / 处理 |
+|------|-------------|
+| 点开闪退、图标变灰 | 7 天证书到期：用同一台电脑重新 Sideloadly 覆盖安装即可，App 内数据会保留 |
+| Sideloadly 提示密码错误 | Apple ID 开了两步验证：去 appleid.apple.com 生成「App 专用密码」，用它代替主密码 |
+| 提示 "Unable to install" | 手机上没点「信任此电脑」；或驱动没装（装 iTunes / Apple Devices） |
+| 提示已达 3 个 App 上限 | 免费账号最多同时签 3 个；删掉其它自签 App 或等 7 天过期后再签 |
+
+> 安全提示：签名时 Apple ID 会交给 Sideloadly 换取签名证书，建议用 **App 专用密码**，
+> 并且只在自己的电脑上操作；不要用「企业签名 / 共享证书」类服务（违反 Apple 条款，
+> 证书易被批量吊销），也不要在陌生电脑上登录 Apple ID。
+>
+> 不需要额外 entitlements：本 App 只用 shared_preferences / path_provider / media_kit /
+> url_launcher，Sideloadly 重签时会自动注入 `application-identifier` 与 `get-task-allow`。
+
+**iOS 已配好的项**：`Info.plist` 加 `NSAppTransportSecurity`（采集站多为 http）、
+`UIBackgroundModes=audio`（已声明后台音频，锁屏是否继续播放取决于 media_kit 的
+AVAudioSession 配置，若锁屏即暂停属已知限制）、中文显示名「热剧速览」；
+部署目标 iOS 15.0（Flutter 模板默认），Bundle ID `com.hotshow.hotshow`。
 
 ### 构建 Android APK
 

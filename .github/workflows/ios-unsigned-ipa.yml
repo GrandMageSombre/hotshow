@@ -1,0 +1,75 @@
+name: Build unsigned iOS IPA
+
+# 用途：Windows 机器上没有 Xcode，用 GitHub 免费的 macOS runner 编出未签名 .ipa，
+# 下载后在本机用 Sideloadly / AltStore 以自己的 Apple ID 签名安装到 iPhone。
+#
+# 注意：仓库是公开仓库时，Actions 的 macOS 分钟数完全免费；
+# 私有仓库每月有 2000 分钟额度（macOS 按 10 倍计），一次构建约 2~4 分钟即 20~40 分钟额度。
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    # macos-latest 目前是 macOS 15 + Xcode 16；若某天 Xcode 版本导致插件编译失败，
+    # 改成 macos-14 固定旧镜像即可
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # 必须与本机一致：pubspec 的 sdk 约束是 ^3.13.7，浮动 stable 可能拉到
+          # 不兼容的 Dart，flutter pub get 会直接失败
+          flutter-version: '3.47.8'
+          cache: true
+
+      - name: Show toolchain versions
+        run: |
+          flutter --version
+          xcodebuild -version
+          pod --version || true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package unsigned IPA
+        run: |
+          set -e
+          APP_PATH="build/ios/iphoneos/Runner.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Runner.app not found, listing build/ios:"
+            find build/ios -maxdepth 4 -name "*.app" -print || true
+            exit 1
+          fi
+          rm -rf Payload hotshow-unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          # 未签名包的 Info.plist 里包名仍是 com.hotshow.hotshow
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" Payload/Runner.app/Info.plist || true
+          zip -qry hotshow-unsigned.ipa Payload
+          ls -lh hotshow-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hotshow-unsigned-ipa
+          path: hotshow-unsigned.ipa
+          retention-days: 30
