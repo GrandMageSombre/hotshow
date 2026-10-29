@@ -31,6 +31,24 @@ void main() {
     expect(calls, 1);
   });
 
+  test('pageSize 与接口 count 对齐时，满页仍算「还有更多」', () async {
+    // 回归：搜索接口 count=20，若 pageSize 用默认 21，20>=21 恒 false，
+    // 会导致永远只显示第一页
+    var calls = 0;
+    final list = PagedShowList(
+      pageSize: 20,
+      loader: (start) async {
+        calls++;
+        return [for (var i = 0; i < 20; i++) item('s$start$i')];
+      },
+    );
+    await list.reset();
+    expect(list.hasMore, isTrue);
+    await list.loadMore();
+    expect(calls, 2);
+    expect(list.items, hasLength(40));
+  });
+
   test('空页判定到底，loadMore 不再请求', () async {
     var calls = 0;
     final list = PagedShowList(loader: (start) async {

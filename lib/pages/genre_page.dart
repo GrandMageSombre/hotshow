@@ -36,18 +36,16 @@ class _GenrePageState extends State<GenrePage> {
   }();
   late final List<FacetOption> _years = buildYears(DateTime.now().year);
   late FilterSelection _selection = FilterSelection(genre: widget.genre);
-  late PagedShowList _list = _makeList(_selection);
+  late PagedShowList _list = _makeList(_selection)..reset();
 
   PagedShowList _makeList(FilterSelection sel) {
-    final list = PagedShowList(
+    return PagedShowList(
       loader: (start) => _service.fetchFiltered(
         tab: widget.tab,
         selection: sel,
         start: start,
       ),
     );
-    list.reset();
-    return list;
   }
 
   @override
@@ -64,6 +62,7 @@ class _GenrePageState extends State<GenrePage> {
       _list = _makeList(sel);
     });
     old.dispose();
+    _list.reset(); // 先挂载再请求
   }
 
   /// 传进来的类型可能不在本域类型表里（详情页跳转），仍要让它高亮

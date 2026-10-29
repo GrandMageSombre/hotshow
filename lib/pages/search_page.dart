@@ -28,9 +28,18 @@ class _SearchPageState extends State<SearchPage> {
   Timer? _debounce;
   String _lastQuery = '';
 
-  /// 关键词搜索的分页状态（loader 读 [_lastQuery]）
-  late final PagedShowList _searchList =
-      PagedShowList(loader: (start) => _service.search(_lastQuery, start: start));
+  /// 关键词搜索的分页状态（loader 读 [_lastQuery]）。
+  /// pageSize 必须与接口 count 一致：豆瓣搜索固定 count=20，
+  /// 若用默认 21 会出现「20 >= 21 为假」→ 永远判定到底，只显示第一页 20 条。
+  static const int _searchPageSize = 20;
+  late final PagedShowList _searchList = PagedShowList(
+    pageSize: _searchPageSize,
+    loader: (start) => _service.search(
+      _lastQuery,
+      start: start,
+      count: _searchPageSize,
+    ),
+  );
 
   /// 非空表示当前是「按类型浏览」，用独立的分页状态
   Genre? _genre;
@@ -57,26 +66,22 @@ class _SearchPageState extends State<SearchPage> {
     super.dispose();
   }
 
-  void _exitGenre() {
-    final old = _genreList;
-    if (old == null) return;
-    setState(() {
-      _genre = null;
-      _genreList = null;
-    });
-    old.dispose();
-  }
-
   void _onChanged(String v) {
     _debounce?.cancel();
     if (v.trim().isEmpty) {
-      _lastQuery = '';
+      // 必须 setState：界面从「结果列表」切回「搜索历史」靠 build 判断 _lastQuery
+      final old = _genreList;
+      setState(() {
+        _lastQuery = '';
+        _genre = null;
+        _genreList = null;
+      });
+      old?.dispose();
       _searchList.reset(); // 空关键词 → loader 返回空，等于清空
-      if (_genre != null) _exitGenre();
       return;
     }
-    // 一旦开始输入关键词，就退出「按类型浏览」
-    if (_genre != null) _exitGenre();
+    // 不在这里退出「按类型浏览」：等 600ms 后 _search 里一次性切到搜索态，
+    // 否则中间会先闪一下搜索历史
     _debounce = Timer(const Duration(milliseconds: 600), _search);
   }
 
@@ -87,12 +92,21 @@ class _SearchPageState extends State<SearchPage> {
 
   /// 点类型条：切到按类型浏览模式
   void _selectGenre(Genre g) {
+    if (g == _genre) return; // 再点同一个类型不重复请求
     _debounce?.cancel();
     _controller.clear();
     _focus.unfocus();
     if (g.isAll) {
-      _lastQuery = '';
-      _exitGenre();
+      // 关键词模式下 _genreList == null，_exitGenre() 会直接 return 不重建，
+      // 导致「点了全部但界面还停在搜索结果」
+      final old = _genreList;
+      setState(() {
+        _genre = null;
+        _genreList = null;
+        _lastQuery = '';
+      });
+      old?.dispose();
+      _searchList.reset();
       return;
     }
     final list = PagedShowList(
@@ -102,7 +116,6 @@ class _SearchPageState extends State<SearchPage> {
         start: start,
       ),
     );
-    list.reset();
     final old = _genreList;
     setState(() {
       _genre = g;
@@ -110,14 +123,22 @@ class _SearchPageState extends State<SearchPage> {
       _lastQuery = '';
     });
     old?.dispose();
+    list.reset(); // 先挂载再请求：首帧 notify 时网格已经在树里
   }
 
   Future<void> _search({bool record = false}) async {
     final kw = _controller.text.trim();
     if (kw.isEmpty) return;
-    _lastQuery = kw;
     if (record) historyStore.addSearch(kw);
-    if (_genre != null) _exitGenre();
+    // 这一步必须 setState：body 是按 _lastQuery 在「历史 / 结果」之间切换的，
+    // 旧实现在这里只赋值不重建，导致输入关键词后界面毫无反应（v1.7.1 修复）
+    final old = _genreList;
+    setState(() {
+      _lastQuery = kw;
+      _genre = null;
+      _genreList = null;
+    });
+    old?.dispose();
     await _searchList.reset();
   }
 

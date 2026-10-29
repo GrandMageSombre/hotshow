@@ -81,9 +81,9 @@ class _GenreBarState extends State<GenreBar> {
                   visualDensity: VisualDensity.compact,
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   labelStyle: const TextStyle(fontSize: 12),
-                  onSelected: (_) {
-                    if (g != widget.selected) widget.onSelected(g);
-                  },
+                  // 已选中的 chip 也要回调：搜索页的「全部」在关键词模式下虽然高亮，
+                  // 但点它应当回到搜索历史（调用方各自决定是否真的重取数据）
+                  onSelected: (_) => widget.onSelected(g),
                 ),
               ),
           ],

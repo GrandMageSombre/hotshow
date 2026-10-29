@@ -7,6 +7,7 @@ import 'package:hotshow/models/facet.dart';
 import 'package:hotshow/models/genre.dart';
 import 'package:hotshow/models/show_item.dart';
 import 'package:hotshow/pages/genre_page.dart';
+import 'package:hotshow/pages/search_page.dart';
 import 'package:hotshow/services/show_service.dart';
 import 'package:hotshow/widgets/legal_notice.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -232,6 +233,60 @@ void main() {
     expect(find.text('正在上映'), findsWidgets);
     expect(find.text('TOP250'), findsWidgets);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('输入关键词能搜出结果（回归：v1.7.0 搜索页不重建）', (tester) async {
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false, legalNotice: false),
+    );
+    await tester.pumpAndSettle();
+    await tapNav(tester, '搜索');
+
+    await tester.enterText(find.byType(TextField), '庆余年');
+    // 等 600ms 防抖
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('庆余年 结果'), findsWidgets);
+  });
+
+  testWidgets('回车立即搜索并写入历史，清空后回到历史页', (tester) async {
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false, legalNotice: false),
+    );
+    await tester.pumpAndSettle();
+    await tapNav(tester, '搜索');
+
+    await tester.enterText(find.byType(TextField), '三体');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('三体 结果'), findsWidgets);
+
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pumpAndSettle();
+    expect(find.text('搜索历史'), findsOneWidget);
+    expect(find.text('三体'), findsWidgets);
+  });
+
+  testWidgets('搜索后点「全部」能回到搜索历史（回归：isAll 分支不重建）', (tester) async {
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false, legalNotice: false),
+    );
+    await tester.pumpAndSettle();
+    await tapNav(tester, '搜索');
+
+    await tester.enterText(find.byType(TextField), '三体');
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('三体 结果'), findsWidgets);
+
+    // 类型条第一个是「全部」（限定在搜索页，IndexedStack 里首页也有「全部」）
+    final allChip = find
+        .descendant(of: find.byType(SearchPage), matching: find.text('全部'))
+        .first;
+    await tester.tap(allChip);
+    await tester.pumpAndSettle();
+    expect(find.text('搜索历史'), findsOneWidget);
   });
 
   testWidgets('分类页：切类型后旧请求的回包不会覆盖新列表', (tester) async {
