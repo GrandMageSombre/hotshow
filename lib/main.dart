@@ -10,6 +10,7 @@ import 'services/playback_store.dart';
 import 'services/show_service.dart';
 import 'services/source_store.dart';
 import 'services/subtitle_store.dart';
+import 'widgets/legal_notice.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,7 +27,16 @@ void main() {
 class HotShowApp extends StatelessWidget {
   final ShowService? service;
   final bool autoRefresh;
-  const HotShowApp({super.key, this.service, this.autoRefresh = true});
+
+  /// 是否在启动时弹「使用声明」（每个版本首次打开弹一次；测试里可关掉）
+  final bool legalNotice;
+
+  const HotShowApp({
+    super.key,
+    this.service,
+    this.autoRefresh = true,
+    this.legalNotice = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -46,7 +56,11 @@ class HotShowApp extends StatelessWidget {
         ),
       ),
       themeMode: ThemeMode.system,
-      home: _HomeShell(service: service, autoRefresh: autoRefresh),
+      home: _HomeShell(
+        service: service,
+        autoRefresh: autoRefresh,
+        legalNotice: legalNotice,
+      ),
     );
   }
 }
@@ -54,7 +68,12 @@ class HotShowApp extends StatelessWidget {
 class _HomeShell extends StatefulWidget {
   final ShowService? service;
   final bool autoRefresh;
-  const _HomeShell({this.service, this.autoRefresh = true});
+  final bool legalNotice;
+  const _HomeShell({
+    this.service,
+    this.autoRefresh = true,
+    this.legalNotice = true,
+  });
 
   @override
   State<_HomeShell> createState() => _HomeShellState();
@@ -62,6 +81,17 @@ class _HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<_HomeShell> {
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.legalNotice) {
+      // 首帧之后再弹：此时 NavigationBar/主题已就绪，弹窗不会闪
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) LegalNotice.showIfNeeded(context);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

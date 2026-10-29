@@ -8,6 +8,7 @@ import 'package:hotshow/models/genre.dart';
 import 'package:hotshow/models/show_item.dart';
 import 'package:hotshow/pages/genre_page.dart';
 import 'package:hotshow/services/show_service.dart';
+import 'package:hotshow/widgets/legal_notice.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class FakeShowService extends ShowService {
@@ -104,6 +105,54 @@ class SlowGenreService extends FakeShowService {
 void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    // 声明弹窗有进程内单例状态，用例之间要复位
+    LegalNotice.debugResetSession();
+  });
+
+  testWidgets('启动弹使用声明：点掉后同版本不再弹，换版本会再弹', (tester) async {
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('使用声明'), findsOneWidget);
+    expect(find.textContaining('个人自用'), findsWidgets);
+    expect(find.textContaining('禁止商业使用'), findsOneWidget);
+    expect(find.textContaining('umena'), findsWidgets);
+
+    await tester.tap(find.text('我已知悉'));
+    await tester.pumpAndSettle();
+    expect(find.text('使用声明'), findsNothing);
+
+    // 同一版本再启动：不再打扰
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('使用声明'), findsNothing);
+  });
+
+  testWidgets('升级到新版本后，声明会再次弹出', (tester) async {
+    SharedPreferences.setMockInitialValues(
+      {'legal_notice_seen_version': '0.0.1'},
+    );
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('使用声明'), findsOneWidget);
+  });
+
+  testWidgets('首页「i」可随时重看声明', (tester) async {
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false, legalNotice: false),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('使用声明'));
+    await tester.pumpAndSettle();
+    expect(find.text('使用声明'), findsOneWidget);
   });
 
   /// 按底部导航条里的文字点击（页内也可能有同名 chip，必须限定范围）
@@ -117,7 +166,7 @@ void main() {
 
   testWidgets('底部导航切换三个页面', (tester) async {
     await tester.pumpWidget(
-      HotShowApp(service: FakeShowService(), autoRefresh: false),
+      HotShowApp(service: FakeShowService(), autoRefresh: false, legalNotice: false),
     );
     await tester.pumpAndSettle();
 
@@ -139,7 +188,7 @@ void main() {
 
   testWidgets('首页有类型筛选条，切类型会走分类接口', (tester) async {
     final service = RecordingShowService();
-    await tester.pumpWidget(HotShowApp(service: service, autoRefresh: false));
+    await tester.pumpWidget(HotShowApp(service: service, autoRefresh: false, legalNotice: false));
     await tester.pumpAndSettle();
 
     expect(find.text('类型'), findsWidgets);
@@ -158,7 +207,7 @@ void main() {
 
   testWidgets('选地区会带上地区 tag，文案同步更新', (tester) async {
     final service = RecordingShowService();
-    await tester.pumpWidget(HotShowApp(service: service, autoRefresh: false));
+    await tester.pumpWidget(HotShowApp(service: service, autoRefresh: false, legalNotice: false));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('地区').first);
@@ -174,7 +223,7 @@ void main() {
 
   testWidgets('电影 Tab 有 5 个子榜单且能渲染网格', (tester) async {
     final service = RecordingShowService();
-    await tester.pumpWidget(HotShowApp(service: service, autoRefresh: false));
+    await tester.pumpWidget(HotShowApp(service: service, autoRefresh: false, legalNotice: false));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('电影').first);
@@ -217,7 +266,7 @@ void main() {
       addTearDown(tester.view.reset);
 
       await tester.pumpWidget(
-        HotShowApp(service: FakeShowService(), autoRefresh: false),
+        HotShowApp(service: FakeShowService(), autoRefresh: false, legalNotice: false),
       );
       await tester.pumpAndSettle();
 
@@ -234,7 +283,7 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
 
     await tester.pumpWidget(
-      HotShowApp(service: FakeShowService(), autoRefresh: false),
+      HotShowApp(service: FakeShowService(), autoRefresh: false, legalNotice: false),
     );
     await tester.pumpAndSettle();
 
@@ -249,7 +298,7 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
 
     await tester.pumpWidget(
-      HotShowApp(service: FakeShowService(), autoRefresh: false),
+      HotShowApp(service: FakeShowService(), autoRefresh: false, legalNotice: false),
     );
     await tester.pumpAndSettle();
 

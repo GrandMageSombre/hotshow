@@ -7,6 +7,7 @@ import '../models/genre.dart';
 import '../services/paged_show_list.dart';
 import '../services/show_service.dart';
 import '../widgets/facet_menu.dart';
+import '../widgets/legal_notice.dart';
 import '../widgets/genre_bar.dart';
 import '../widgets/paged_show_grid.dart';
 
@@ -43,6 +44,11 @@ class _HomePageState extends State<HomePage>
         title: const Text('热剧速览'),
         centerTitle: false,
         actions: [
+          IconButton(
+            tooltip: '使用声明',
+            onPressed: () => LegalNotice.show(context),
+            icon: const Icon(Icons.info_outline_rounded),
+          ),
           IconButton(
             tooltip: '刷新榜单',
             onPressed: _refreshCurrent,
