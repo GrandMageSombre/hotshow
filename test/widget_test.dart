@@ -110,7 +110,7 @@ void main() {
     LegalNotice.debugResetSession();
   });
 
-  testWidgets('启动弹使用声明：点掉后同版本不再弹，换版本会再弹', (tester) async {
+  testWidgets('每次启动都弹使用声明（默认开启）', (tester) async {
     await tester.pumpWidget(
       HotShowApp(service: FakeShowService(), autoRefresh: false),
     );
@@ -120,12 +120,37 @@ void main() {
     expect(find.textContaining('个人自用'), findsWidgets);
     expect(find.textContaining('禁止商业使用'), findsOneWidget);
     expect(find.textContaining('umena'), findsWidgets);
+    // 底部新增的开关
+    expect(find.text('每次打开时显示此声明'), findsOneWidget);
 
     await tester.tap(find.text('我已知悉'));
     await tester.pumpAndSettle();
     expect(find.text('使用声明'), findsNothing);
 
-    // 同一版本再启动：不再打扰
+    // 默认开关值应被原样写回（未改动不改设置）
+    final sp = await SharedPreferences.getInstance();
+    expect(sp.getBool(LegalNotice.onLaunchKey), isTrue);
+  });
+
+  testWidgets('取消勾选后写入设置，下次启动不再自动弹', (tester) async {
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false),
+    );
+    await tester.pumpAndSettle();
+
+    final box = find.byType(CheckboxListTile);
+    await tester.ensureVisible(box);
+    await tester.tap(box);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('我已知悉'));
+    await tester.pumpAndSettle();
+
+    final sp = await SharedPreferences.getInstance();
+    expect(sp.getBool(LegalNotice.onLaunchKey), isFalse);
+
+    // 模拟「下次启动」：进程内状态复位后重新挂载 App
+    LegalNotice.debugResetSession();
     await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(
       HotShowApp(service: FakeShowService(), autoRefresh: false),
@@ -134,10 +159,32 @@ void main() {
     expect(find.text('使用声明'), findsNothing);
   });
 
-  testWidgets('升级到新版本后，声明会再次弹出', (tester) async {
-    SharedPreferences.setMockInitialValues(
-      {'legal_notice_seen_version': '0.0.1'},
+  testWidgets('关掉后仍可从首页「i」重看，并再次打开自动弹出', (tester) async {
+    SharedPreferences.setMockInitialValues({LegalNotice.onLaunchKey: false});
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false),
     );
+    await tester.pumpAndSettle();
+    expect(find.text('使用声明'), findsNothing);
+
+    await tester.tap(find.byTooltip('使用声明'));
+    await tester.pumpAndSettle();
+    expect(find.text('使用声明'), findsOneWidget);
+
+    final box = find.byType(CheckboxListTile);
+    // 打开瞬间必须反映已存的 false（若 _present 写死 true，这条会先挂）
+    expect(tester.widget<CheckboxListTile>(box).value, isFalse);
+    await tester.ensureVisible(box);
+    await tester.tap(box); // 重新勾上
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('我已知悉'));
+    await tester.pumpAndSettle();
+
+    final sp = await SharedPreferences.getInstance();
+    expect(sp.getBool(LegalNotice.onLaunchKey), isTrue);
+
+    LegalNotice.debugResetSession();
+    await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(
       HotShowApp(service: FakeShowService(), autoRefresh: false),
     );
@@ -329,6 +376,21 @@ void main() {
       expect(find.byType(GridView), findsWidgets);
     });
   }
+
+  // 手机竖屏（360x800）下，开关若被条款挤出首屏，用户根本发现不了「可以关掉」
+  testWidgets('360x800 竖屏：勾选框无需滚动即可见可点', (tester) async {
+    tester.view.physicalSize = const Size(360, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      HotShowApp(service: FakeShowService(), autoRefresh: false),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(CheckboxListTile).hitTestable(), findsOneWidget);
+  });
 
   testWidgets('系统字体放大到 1.3 倍时卡片仍不溢出', (tester) async {
     tester.view.physicalSize = const Size(360, 780);

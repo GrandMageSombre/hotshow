@@ -28,7 +28,7 @@ class HotShowApp extends StatelessWidget {
   final ShowService? service;
   final bool autoRefresh;
 
-  /// 是否在启动时弹「使用声明」（每个版本首次打开弹一次；测试里可关掉）
+  /// 是否在启动时弹「使用声明」（默认每次冷启动都弹，弹窗里可关掉；测试里可关掉）
   final bool legalNotice;
 
   const HotShowApp({

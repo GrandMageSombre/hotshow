@@ -1,5 +1,5 @@
-// 版本号一致性：启动声明按版本号记录已读，两处不同步会导致
-// 「升级后不重弹」或「每次启动都弹」，这里用测试兜住。
+// 版本号一致性：pubspec 与 app_info 两处不同步会导致「关于/更新」显示错版本，
+// 这里用测试兜住。
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
