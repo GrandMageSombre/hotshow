@@ -10,10 +10,12 @@ import '../models/media_resource.dart';
 import '../models/subtitle.dart';
 import '../services/offline_cache.dart';
 import '../services/playback_store.dart';
+import '../services/quality_service.dart';
 import '../services/remote_ua.dart';
 import '../services/subtitle_message.dart';
 import '../services/subtitle_service.dart';
 import '../services/subtitle_store.dart';
+import '../widgets/player_gesture_layer.dart';
 import 'subtitle_page.dart';
 
 /// 播放页：media_kit（libmpv）播放 m3u8，支持选集、线路切换、倍速、
@@ -72,6 +74,21 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 字幕选择版本号：挂载过程中又发生变更时用它补挂最新一条
   int _subtitleRev = 0;
 
+  // ------------------------------------------------------- 手势 / 清晰度
+
+  /// 音量 0..100（media_kit 的取值域），初值取播放器实际音量
+  final ValueNotifier<double> _volume = ValueNotifier<double>(100);
+
+  /// 亮度 0.05..1.0（1.0 = 不遮罩）。用画面遮罩实现，三端表现一致
+  final ValueNotifier<double> _brightness = ValueNotifier<double>(1);
+
+  /// m3u8 master 里探测到的码率变体（单码率或探测失败时为空）
+  List<QualityOption> _variants = const [];
+  int _qualityEpoch = 0;
+
+  /// 用户手选的变体地址；null = 用线路原始地址（「自动」交给播放器自适应）
+  String? _variantUrl;
+
   // 整条线路批量缓存
   int _batchDone = 0;
   int _batchTotal = 0;
@@ -98,6 +115,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _episodeIndex = _resolveInitialEpisode();
     _applyResumeRecord();
     _subtitle = subtitleStore.selectedFor(_r.key);
+    _volume.value = _player.state.volume.clamp(0.0, 100.0);
 
     _completedSub = _player.stream.completed.listen(_onCompleted);
     _errorSub = _player.stream.error.listen((e) {
@@ -122,6 +140,8 @@ class _PlayerPageState extends State<PlayerPage> {
     _errorSub.cancel();
     _cache.removeListener(_onCacheTick);
     subtitleStore.removeListener(_onSubtitleStoreChanged);
+    _volume.dispose();
+    _brightness.dispose();
     _saveProgress();
     _player.dispose();
     super.dispose();
@@ -210,9 +230,12 @@ class _PlayerPageState extends State<PlayerPage> {
     }
     final epoch = ++_openEpoch;
     final cached = _cache.byKey(_cacheKeyFor(_groupIndex, _episodeIndex));
-    final useLocal =
-        cached != null && File(cached.localFile).existsSync();
-    final uri = useLocal ? Uri.file(cached.localFile).toString() : ep.url;
+    // 手选了具体清晰度就走网络：本地缓存是整集固定码率，不能拿来顶替
+    final useLocal = _variantUrl == null &&
+        cached != null &&
+        File(cached.localFile).existsSync();
+    final playUrl = _variantUrl ?? ep.url;
+    final uri = useLocal ? Uri.file(cached.localFile).toString() : playUrl;
 
     setState(() {
       _opening = true;
@@ -221,7 +244,7 @@ class _PlayerPageState extends State<PlayerPage> {
     });
     try {
       await _player.open(
-        Media(uri, httpHeaders: useLocal ? null : _headersFor(ep.url)),
+        Media(uri, httpHeaders: useLocal ? null : _headersFor(playUrl)),
         play: true,
       );
       // 已被更新的打开请求（连点选集/自动连播）取代，别再往下挂字幕
@@ -234,6 +257,8 @@ class _PlayerPageState extends State<PlayerPage> {
       await _player.setRate(_rate);
       // 换集/换线路后 libmpv 会清空外部字幕，需重新挂载
       await _applySubtitle();
+      // 清晰度探测放到后台，探测失败也不影响播放
+      if (!useLocal) unawaited(_probeQualities(ep.url));
     } catch (e) {
       if (mounted && epoch == _openEpoch) setState(() => _error = '$e');
     } finally {
@@ -514,7 +539,7 @@ class _PlayerPageState extends State<PlayerPage> {
     });
   }
 
-  Future<void> _switchEpisode(int index, {int? group}) async {
+  Future<void> _switchEpisode(int index, {int? group, Duration? seekTo}) async {
     // 先按「当前集 + 当前播放位置」落一次进度，再切索引；
     // 否则旧集的位置会被记到新集上，下次续播直接跳到片尾。
     await _saveProgress();
@@ -528,7 +553,10 @@ class _PlayerPageState extends State<PlayerPage> {
     } else {
       setState(() => _episodeIndex = index);
     }
-    await _openCurrent();
+    // 换集/换线路后回到该线路的默认清晰度
+    _variantUrl = null;
+    _variants = const [];
+    await _openCurrent(seekTo: seekTo);
   }
 
   Future<void> _onCompleted(bool completed) async {
@@ -556,6 +584,122 @@ class _PlayerPageState extends State<PlayerPage> {
     ));
   }
 
+  // ------------------------------------------------------- 手势与清晰度
+
+  void _applyVolume(double v) {
+    if (!mounted) return;
+    _volume.value = v;
+    _player.setVolume(v);
+  }
+
+  void _applyBrightness(double v) => _brightness.value = v;
+
+  /// 读一次 m3u8，把 master playlist 里的码率变体列出来。
+  /// 失败/单码率都只是「没有更多清晰度可选」，不影响播放。
+  Future<void> _probeQualities(String url) async {
+    final epoch = ++_qualityEpoch;
+    final found = await qualityService.probe(url, headers: _headersFor(url));
+    if (!mounted || epoch != _qualityEpoch) return;
+    setState(() => _variants = found);
+  }
+
+  /// 可切换的清晰度：m3u8 变体优先，其次是「线路名里带清晰度字样」的其它线路
+  List<QualityOption> get _qualityOptions {
+    final groups = groupQualityOptions(_r.groups);
+    if (_variants.isEmpty) return groups;
+    return [..._variants, ...groups];
+  }
+
+  /// 当前选中项 id：'auto' / 变体地址 / 'g:线路下标'
+  String get _currentQualityId {
+    if (_variantUrl != null) return _variantUrl!;
+    if (_variants.isNotEmpty) return 'auto';
+    if (qualityRankOfName(_group?.name ?? '') > 0) return 'g:$_groupIndex';
+    return '';
+  }
+
+  String get _qualityLabel {
+    final id = _currentQualityId;
+    if (id.isEmpty) return '清晰度';
+    for (final o in _qualityOptions) {
+      if (o.id == id) return o.label;
+    }
+    return '清晰度';
+  }
+
+  Future<void> _switchQuality(QualityOption option) async {
+    if (option.id == _currentQualityId) return;
+    if (option.isGroup) {
+      if (option.groupIndex == _groupIndex) return;
+      // 换线路但保持当前播放位置，观感上才是「换了个清晰度」而不是「重看」
+      final pos = _player.state.position;
+      await _switchEpisode(_episodeIndex, group: option.groupIndex, seekTo: pos);
+      _toast('已切换到「${option.label}」线路');
+      return;
+    }
+    final pos = _player.state.position;
+    setState(() => _variantUrl = option.isAuto ? null : option.url);
+    await _openCurrent(seekTo: pos);
+    _toast(option.isAuto ? '清晰度：自动适应' : '已切换到 ${option.label}');
+  }
+
+  Future<void> _openQualitySheet() async {
+    final options = _qualityOptions;
+    if (options.isEmpty) {
+      _toast('当前片源没有可切换的清晰度');
+      return;
+    }
+    final current = _currentQualityId;
+    final picked = await showModalBottomSheet<QualityOption>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final scheme = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+                child: Row(
+                  children: [
+                    const Text('清晰度',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold)),
+                    const Spacer(),
+                    Text(
+                      '共 ${options.length} 个',
+                      style: TextStyle(
+                          fontSize: 11, color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              for (final o in options)
+                ListTile(
+                  leading: Icon(
+                    o.id == current
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_unchecked_rounded,
+                    color: o.id == current ? scheme.primary : null,
+                  ),
+                  title: Text(o.label, style: const TextStyle(fontSize: 14)),
+                  subtitle: o.detail.isEmpty
+                      ? null
+                      : Text(o.detail, style: const TextStyle(fontSize: 11)),
+                  onTap: () => Navigator.pop(ctx, o),
+                ),
+              const SizedBox(height: 6),
+            ],
+          ),
+        );
+      },
+    );
+    if (picked == null || !mounted) return;
+    await _switchQuality(picked);
+  }
+
   // ---------------------------------------------------------------- 缓存
 
   Future<void> _cacheCurrentEpisode() async {
@@ -567,13 +711,15 @@ class _PlayerPageState extends State<PlayerPage> {
       return;
     }
     _toast('开始缓存「${ep.name}」');
+    // 缓存用户当前正在看的那个清晰度，而不是线路默认地址
+    final url = _variantUrl ?? ep.url;
     try {
       await _cache.download(
         key: key,
         title: _r.title,
         episodeName: ep.name,
-        m3u8Url: ep.url,
-        headers: _headersFor(ep.url),
+        m3u8Url: url,
+        headers: _headersFor(url),
       );
       _toast('「${ep.name}」缓存完成，可在离线状态播放');
     } on OfflineCacheException catch (e) {
@@ -775,7 +921,7 @@ class _PlayerPageState extends State<PlayerPage> {
     final video = Video(
       controller: _controller,
       // 每次 build 传新闭包，使自定义按钮能跟随页面状态（倍速、缓存进度）刷新
-      controls: (state) => AdaptiveVideoControls(state),
+      controls: _controlsOverlay,
       fit: BoxFit.contain,
     );
     final desktop = _isDesktop;
@@ -787,6 +933,7 @@ class _PlayerPageState extends State<PlayerPage> {
       const Spacer(),
       _barButton(desktop, Icons.video_library_outlined, _openEpisodesSheet, '选集'),
       _cacheBarButton(desktop),
+      _qualityButton(),
       _rateButton(desktop),
       if (desktop)
         const MaterialDesktopFullscreenButton()
@@ -826,6 +973,43 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
+  /// 视频之上的叠加层，自下而上：亮度遮罩 → 原生控件 → 手势层。
+  /// 遮罩压在控件下面，调暗画面时按钮和进度条仍然清晰可辨。
+  Widget _controlsOverlay(VideoState state) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ValueListenableBuilder<double>(
+          valueListenable: _brightness,
+          builder: (_, brightness, _) {
+            final dim = (1 - brightness) * 0.85;
+            if (dim <= 0.001) return const SizedBox.shrink();
+            // 遮罩是整块视频面积的 alpha 混合，单独包一层避免连带重绘视频
+            return RepaintBoundary(
+              child: IgnorePointer(
+                child: ColoredBox(color: Colors.black.withValues(alpha: dim)),
+              ),
+            );
+          },
+        ),
+        AdaptiveVideoControls(state),
+        PlayerGestureLayer(
+          volume: _volume,
+          brightness: _brightness,
+          readPosition: () => _player.state.position,
+          readDuration: () => _player.state.duration,
+          onVolumeChanged: _applyVolume,
+          onBrightnessChanged: _applyBrightness,
+          onSeek: (t) {
+            // 手势松手可能正好撞上页面关闭（player 已 dispose），先挡一道
+            if (mounted) _player.seek(t);
+          },
+          enabled: !_opening,
+        ),
+      ],
+    );
+  }
+
   bool get _isDesktop {
     final p = defaultTargetPlatform;
     return p == TargetPlatform.windows ||
@@ -862,6 +1046,41 @@ class _PlayerPageState extends State<PlayerPage> {
           '${_rate}x',
           style: const TextStyle(
               color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+        ),
+      ),
+    );
+  }
+
+  /// 清晰度入口：只有真的探测到多个清晰度时才出现，避免一排没用的按钮
+  Widget _qualityButton() {
+    if (_qualityOptions.isEmpty) return const SizedBox.shrink();
+    return Tooltip(
+      message: '清晰度',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(6),
+        onTap: _openQualitySheet,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.hd_rounded, size: 16, color: Colors.white),
+              const SizedBox(width: 2),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 56),
+                child: Text(
+                  _qualityLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
