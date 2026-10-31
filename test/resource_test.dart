@@ -234,4 +234,13 @@ void main() {
       expect(results.first.error, contains('尚未配置采集站'));
     });
   });
+
+  group('换片源用的片名归一化', () {
+    test('去掉标点与季数后缀，得到各站更通用的检索词', () {
+      expect(normalizeTitle('赛博朋克：边缘行者第二季'), '赛博朋克边缘行者');
+      expect(normalizeTitle('庆余年 第二季'), '庆余年');
+      expect(normalizeTitle('The Last of Us Season 2'.replaceAll(' ', '')),
+          'thelastofus');
+    });
+  });
 }

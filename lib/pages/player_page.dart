@@ -15,6 +15,8 @@ import '../services/player_gestures.dart' show GestureConfig;
 import '../services/quality_service.dart';
 import '../services/quality_store.dart';
 import '../services/remote_ua.dart';
+import '../services/resource_service.dart';
+import '../services/source_store.dart';
 import '../services/subtitle_message.dart';
 import '../services/subtitle_service.dart';
 import '../services/subtitle_store.dart';
@@ -32,11 +34,19 @@ class PlayerPage extends StatefulWidget {
   /// 豆瓣别名（含英文名），字幕搜索时作为片名候选
   final List<String> altTitles;
 
+  /// 换片源后接着看：指定线路/集/起播位置（null = 用默认线路、第 1 集）
+  final int? initialGroup;
+  final int? initialEpisode;
+  final Duration? startAt;
+
   const PlayerPage({
     super.key,
     required this.resource,
     this.resume = true,
     this.altTitles = const [],
+    this.initialGroup,
+    this.initialEpisode,
+    this.startAt,
   });
 
   @override
@@ -98,6 +108,12 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 等首帧的兜底计时器（dispose 要能取消）
   Timer? _probeTimer;
 
+  /// 播放器实测到的视频分辨率（mpv 解码参数，用来显示当前真实清晰度）
+  int? _videoW;
+  int? _videoH;
+  StreamSubscription<int?>? _wSub;
+  StreamSubscription<int?>? _hSub;
+
   /// 播放器参数只设一次；`_openCurrent` 先 await 它，避免 open 抢在设参之前
   late final Future<void> _tuneFuture;
 
@@ -106,7 +122,13 @@ class _PlayerPageState extends State<PlayerPage> {
   int _batchTotal = 0;
   bool _batchAbort = false;
 
-  MediaResource get _r => widget.resource;
+  /// 当前片源：换片源时原地替换，避免 pushReplacement 重建 Player 导致黑屏重连
+  late MediaResource _resource = widget.resource;
+
+  /// 换过的片源栈，支持一键切回
+  final List<MediaResource> _history = [];
+
+  MediaResource get _r => _resource;
 
   PlayGroup? get _group => _r.groupAt(_groupIndex);
 
@@ -129,6 +151,12 @@ class _PlayerPageState extends State<PlayerPage> {
     _subtitle = subtitleStore.selectedFor(_r.key);
     _volume.value = _player.state.volume.clamp(0.0, 100.0);
     _tuneFuture = _tunePlayer();
+    _wSub = _player.stream.width.listen((w) {
+      if (mounted && w != null && w != _videoW) setState(() => _videoW = w);
+    });
+    _hSub = _player.stream.height.listen((h) {
+      if (mounted && h != null && h != _videoH) setState(() => _videoH = h);
+    });
 
     _completedSub = _player.stream.completed.listen(_onCompleted);
     _errorSub = _player.stream.error.listen((e) {
@@ -154,6 +182,8 @@ class _PlayerPageState extends State<PlayerPage> {
     _cache.removeListener(_onCacheTick);
     subtitleStore.removeListener(_onSubtitleStoreChanged);
     _probeTimer?.cancel();
+    _wSub?.cancel();
+    _hSub?.cancel();
     _volume.dispose();
     _brightness.dispose();
     _saveProgress();
@@ -201,15 +231,29 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   int _resolveInitialGroup() {
+    final forced = widget.initialGroup;
+    if (forced != null && forced >= 0 && forced < _r.groups.length) {
+      return forced;
+    }
     final d = _r.defaultGroup;
     if (d == null) return 0;
     return _r.groups.indexOf(d);
   }
 
-  int _resolveInitialEpisode() => 0;
+  int _resolveInitialEpisode() {
+    final forced = widget.initialEpisode;
+    final g = _group;
+    if (forced == null || g == null || g.episodes.isEmpty) return 0;
+    return forced.clamp(0, g.episodes.length - 1).toInt();
+  }
 
   /// 若存在上次进度且未看完，则沿用上次的线路 / 集 / 位置
   void _applyResumeRecord() {
+    // 换片源进来时位置由调用方给（startAt），不要被旧记录盖掉
+    if (widget.startAt != null) {
+      _pendingSeek = widget.startAt;
+      return;
+    }
     if (!widget.resume) return;
     final rec = playbackStore.of(_r.key);
     if (rec == null || rec.finished || !rec.hasProgress) return;
@@ -239,6 +283,9 @@ class _PlayerPageState extends State<PlayerPage> {
       setState(() {
         _opening = false;
         _error = '该线路没有可播放的剧集';
+        // 待跳位置只对「这一次打开」有效，没打开成功就别留着，
+        // 否则下一次打开会莫名其妙跳到上一条片源的位置
+        _pendingSeek = null;
       });
       return;
     }
@@ -586,6 +633,8 @@ class _PlayerPageState extends State<PlayerPage> {
     _variantUrl = null;
     _activeVariantUrl = null;
     _variants = const [];
+    _videoW = null;
+    _videoH = null;
     await _openCurrent(seekTo: seekTo);
   }
 
@@ -726,11 +775,23 @@ class _PlayerPageState extends State<PlayerPage> {
     return '';
   }
 
+  /// mpv 实测分辨率 → 1080P 这类标签；拿不到返回 null。
+  /// 采集站的片源几乎都是单码率，靠它至少能看出「现在到底是多少清晰度」。
+  String? get _measuredLabel {
+    final w = _videoW;
+    final h = _videoH;
+    if (w == null || h == null || h <= 0) return null;
+    return qualityLabel('${w}x$h', 0);
+  }
+
+  /// 按钮上的标签只写「标称档位」：实测分辨率会被播放器缩放（720p 也可能
+  /// 解码成 1080 输出），拿它冒充档位会误导人，所以只作为菜单里的副信息。
   String get _qualityLabel {
     final id = _currentQualityId;
-    if (id.isEmpty) return '清晰度';
-    for (final o in _qualityOptions) {
-      if (o.id == id) return o.label;
+    if (id.isNotEmpty) {
+      for (final o in _qualityOptions) {
+        if (o.id == id) return o.label;
+      }
     }
     return '清晰度';
   }
@@ -760,13 +821,13 @@ class _PlayerPageState extends State<PlayerPage> {
 
   Future<void> _openQualitySheet() async {
     final options = _qualityOptions;
-    if (options.isEmpty) {
-      _toast('当前片源没有可切换的清晰度');
-      return;
-    }
     final current = _currentQualityId;
     final remembered = qualityStore.labelFor(_r.key);
-    final picked = await showModalBottomSheet<QualityOption>(
+    // mpv 报的是解码输出尺寸，只当副信息，不冒充「档位」
+    final measured = _videoW != null && _videoH != null
+        ? '当前实测 $_videoW×$_videoH'
+        : null;
+    final picked = await showModalBottomSheet<Object>(
       context: context,
       showDragHandle: true,
       builder: (ctx) {
@@ -785,13 +846,23 @@ class _PlayerPageState extends State<PlayerPage> {
                             fontSize: 16, fontWeight: FontWeight.bold)),
                     const Spacer(),
                     Text(
-                      '共 ${options.length} 个',
+                      '$_qualityLabel${measured == null ? '' : ' · $measured'}',
                       style: TextStyle(
                           fontSize: 11, color: scheme.onSurfaceVariant),
                     ),
                   ],
                 ),
               ),
+              if (options.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+                  child: Text(
+                    '这个片源只有单码率，没有可选档位。'
+                    '同一部剧在别的站点往往是另一个清晰度，试试下面的「换片源」。',
+                    style:
+                        TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                  ),
+                ),
               for (final o in options)
                 ListTile(
                   leading: Icon(
@@ -820,14 +891,112 @@ class _PlayerPageState extends State<PlayerPage> {
                       : Text(o.detail, style: const TextStyle(fontSize: 11)),
                   onTap: () => Navigator.pop(ctx, o),
                 ),
+              Divider(height: 8, color: scheme.outlineVariant),
+              if (_history.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.undo_rounded),
+                  title: Text(
+                    '切回「${_history.last.siteName}」',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  onTap: () => Navigator.pop(ctx, 'back'),
+                ),
+              ListTile(
+                leading: const Icon(Icons.swap_horiz_rounded),
+                title:
+                    const Text('换片源（其它站点）', style: TextStyle(fontSize: 14)),
+                subtitle: Text(
+                  '按「${_r.title}」再搜一遍所有站点，换一个更清晰的版本'
+                  '（当前：${_r.siteName} · ${_group?.name ?? ''}）',
+                  style: const TextStyle(fontSize: 11),
+                ),
+                onTap: () => Navigator.pop(ctx, 'source'),
+              ),
               const SizedBox(height: 6),
             ],
           ),
         );
       },
     );
+    if (!mounted || picked == null) return;
+    if (picked is QualityOption) {
+      await _switchQuality(picked);
+    } else if (picked == 'source') {
+      await _openSourceSheet();
+    } else if (picked == 'back') {
+      await _backToPrevResource();
+    }
+  }
+
+  /// 换片源：按片名到所有已启用站点再搜一遍，选一个继续看
+  Future<void> _openSourceSheet() async {
+    if (sourceStore.enabledSites.isEmpty) {
+      _toast('还没有配置采集站，先去「站点设置」添加');
+      return;
+    }
+    final picked = await showModalBottomSheet<MediaResource>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _SourceSheet(
+        title: _r.title,
+        currentKey: _r.key,
+        year: _r.year.trim().isEmpty ? null : _r.year.trim(),
+      ),
+    );
     if (picked == null || !mounted) return;
-    await _switchQuality(picked);
+    await _switchResource(picked);
+  }
+
+  /// 换到另一条资源：**原地替换**（不重建页面/播放器），保持当前集与播放位置。
+  /// 用 pushReplacement 会销毁 Player 再重连，换源瞬间黑屏，也丢掉上一个源。
+  Future<void> _switchResource(
+    MediaResource res, {
+    bool remember = true,
+  }) async {
+    if (res.groups.isEmpty) {
+      _toast('这个资源没有可播放的线路');
+      return;
+    }
+    if (res.key == _resource.key) return;
+    final pos = _player.state.position;
+    await _saveProgress();
+    if (!mounted) return;
+    if (remember) _history.add(_resource);
+
+    final gi = _groupIndex.clamp(0, res.groups.length - 1).toInt();
+    final epLen = res.groupAt(gi)?.length ?? 1;
+    final ei = _episodeIndex.clamp(0, epLen - 1).toInt();
+    final subtitle = subtitleStore.selectedFor(res.key);
+    setState(() {
+      _resource = res;
+      _groupIndex = gi;
+      _episodeIndex = ei;
+      // 换源后清晰度偏好/分档都按新源重新来
+      _variantUrl = null;
+      _activeVariantUrl = null;
+      _variants = const [];
+      _pendingSeek = pos > const Duration(seconds: 2) ? pos : null;
+      // 字幕是跟着 siteId#vodId 记的，换源要重新取；但**不重置模式**——
+      // 用户选的「内嵌字幕」在新源同样适用，关掉会莫名其妙没字幕
+      _subtitle = subtitle;
+      if (subtitle != null && _subtitleMode == _SubtitleMode.off) {
+        _subtitleMode = _SubtitleMode.external;
+      }
+      _subtitleRev++;
+      // 新源首帧前别继续显示上一条片源的实测分辨率
+      _videoW = null;
+      _videoH = null;
+    });
+    _toast('已换到「${res.siteName}」');
+    await _openCurrent();
+  }
+
+  /// 切回上一个片源（换源栈非空时才有意义）
+  Future<void> _backToPrevResource() async {
+    if (_history.isEmpty) return;
+    final prev = _history.removeLast();
+    await _switchResource(prev, remember: false);
   }
 
   // ---------------------------------------------------------------- 缓存
@@ -1173,7 +1342,6 @@ class _PlayerPageState extends State<PlayerPage> {
 
   /// 清晰度入口：只有真的探测到多个清晰度时才出现，避免一排没用的按钮
   Widget _qualityButton() {
-    if (_qualityOptions.isEmpty) return const SizedBox.shrink();
     return Tooltip(
       message: '清晰度',
       child: InkWell(
@@ -1269,7 +1437,8 @@ class _PlayerPageState extends State<PlayerPage> {
                 Text(
                   '${_r.siteName} · ${_group?.name ?? ''} · '
                   '${_group?.length ?? 0} 集'
-                  '${_isLocal ? ' · 本地缓存' : ''}',
+                  '${_isLocal ? ' · 本地缓存' : ''}'
+                  '${_measuredLabel == null ? '' : ' · 实测 ${_measuredLabel!}'}',
                   style: const TextStyle(color: Colors.white60, fontSize: 11),
                 ),
               ],
@@ -1455,6 +1624,174 @@ class _EpisodeSheetState extends State<_EpisodeSheet> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 换片源面板：按片名到所有已启用站点再搜一遍，按匹配度排序。
+/// 采集站几乎没有多码率母带，能真正换清晰度的办法就是换站点。
+///
+/// 搜索跑两轮：先用站点给的完整片名，再用去掉标点/季数后缀的归一化片名——
+/// 各站片名写法不一致（「赛博朋克：边缘行者第二季」vs「赛博朋克边缘行者」），
+/// 单用哪一个都会漏掉一部分站点。
+class _SourceSheet extends StatefulWidget {
+  final String title;
+  final String currentKey;
+  final String? year;
+
+  const _SourceSheet({
+    required this.title,
+    required this.currentKey,
+    this.year,
+  });
+
+  @override
+  State<_SourceSheet> createState() => _SourceSheetState();
+}
+
+class _SourceSheetState extends State<_SourceSheet> {
+  final List<MediaResource> _items = [];
+  final Set<String> _seen = {};
+  StreamSubscription<SiteSearchResult>? _sub;
+  int _round = 0;
+  int _rounds = 1;
+  bool _loading = true;
+
+  List<String> get _keywords {
+    final raw = widget.title.trim();
+    final bare = normalizeTitle(raw);
+    return [
+      if (raw.isNotEmpty) raw,
+      if (bare.isNotEmpty && bare != raw) bare,
+    ];
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _rounds = _keywords.length.clamp(1, 2);
+    _runRound();
+  }
+
+  void _runRound() {
+    final keywords = _keywords;
+    if (_round >= keywords.length) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
+    final sites = sourceStore.enabledSites;
+    if (sites.isEmpty) {
+      setState(() => _loading = false);
+      return;
+    }
+    setState(() => _loading = true);
+    _sub?.cancel();
+    _sub = ResourceService.instance.searchAll(sites, keywords[_round]).listen(
+      (r) {
+        if (!mounted) return;
+        setState(() {
+          for (final item in r.items) {
+            if (_seen.add(item.key)) _items.add(item);
+          }
+        });
+      },
+      onDone: () {
+        if (!mounted) return;
+        _round++;
+        if (_round < keywords.length) {
+          _runRound();
+        } else {
+          setState(() => _loading = false);
+        }
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final list =
+        rankResources(_items, widget.title, year: widget.year).take(40).toList();
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.of(context).size.height * 0.7,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+              child: Row(
+                children: [
+                  const Text('换片源',
+                      style:
+                          TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Spacer(),
+                  Text(
+                    _loading
+                        ? '搜索中…（$_rounds 轮）'
+                        : '${list.length} 个结果',
+                    style:
+                        TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+            if (_loading) const LinearProgressIndicator(minHeight: 2),
+            Expanded(
+              child: list.isEmpty
+                  ? Center(
+                      child: Text(
+                        _loading ? '正在搜索其它站点…' : '没有搜到别的片源',
+                        style: TextStyle(
+                            fontSize: 12, color: scheme.onSurfaceVariant),
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: list.length,
+                      itemBuilder: (ctx, i) {
+                        final r = list[i];
+                        final isCurrent = r.key == widget.currentKey;
+                        return ListTile(
+                          dense: true,
+                          leading: Icon(
+                            isCurrent
+                                ? Icons.play_circle_fill_rounded
+                                : Icons.play_circle_outline_rounded,
+                            color: isCurrent ? scheme.primary : null,
+                          ),
+                          title: Text(
+                            '${r.title}${isCurrent ? '（当前）' : ''}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                          subtitle: Text(
+                            '${r.siteName} · ${r.groups.length} 线路 · '
+                            '${r.episodeCount} 集'
+                            '${r.remarks.isEmpty ? '' : ' · ${r.remarks}'}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          trailing: isCurrent
+                              ? null
+                              : const Icon(Icons.chevron_right_rounded),
+                          onTap: isCurrent
+                              ? null
+                              : () => Navigator.pop(context, r),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
