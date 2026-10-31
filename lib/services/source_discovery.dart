@@ -64,6 +64,16 @@ const List<String> kDefaultCatalogUrls = [
   'https://cdn.jsdelivr.net/gh/gaotianliuyun/gao@master/0821.json',
 ];
 
+/// 「高清/4K 向」的公开清单（TVBox 生态里流传的 4K 配置）。
+///
+/// 这些地址连通性因网络而异，所以**不当成默认源**，只在用户主动点「找 4K/高清源」时试；
+/// 拉不到就跳过，能拉到的仍然走同一套「并发探测 + 手动勾选」流程，不会盲加。
+const List<String> kHdCatalogUrls = [
+  'https://cdn.jsdelivr.net/gh/keluo8824-cell/tvbox@main/4k.json',
+  'https://cdn.jsdelivr.net/gh/gaotianliuyun/gao@master/0821.json',
+];
+
+
 /// 采集站自动发现：解析候选清单（远程 JSON / 纯文本 / 手动粘贴），
 /// 并发探测可用性，供用户勾选后导入。
 class SourceDiscovery {

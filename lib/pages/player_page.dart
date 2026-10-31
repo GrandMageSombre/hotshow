@@ -9,6 +9,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import '../models/media_resource.dart';
 import '../models/subtitle.dart';
 import '../services/offline_cache.dart';
+import '../services/bitrate_probe.dart';
 import '../services/brightness_strategy.dart';
 import '../services/playback_store.dart';
 import '../services/player_gestures.dart' show GestureConfig;
@@ -1653,6 +1654,13 @@ class _SourceSheet extends StatefulWidget {
 class _SourceSheetState extends State<_SourceSheet> {
   final List<MediaResource> _items = [];
   final Set<String> _seen = {};
+
+  /// 站点 key -> 实测码率（null = 测过但不支持/失败）
+  final Map<String, BitrateEstimate?> _bitrates = {};
+  bool _measuring = false;
+
+  /// 本次会话里是否提示过「测码率要花流量」
+  static bool _trafficNoticeShown = false;
   StreamSubscription<SiteSearchResult>? _sub;
   int _round = 0;
   int _rounds = 1;
@@ -1708,6 +1716,86 @@ class _SourceSheetState extends State<_SourceSheet> {
     );
   }
 
+  /// 逐条实测码率（用户点「测清晰度」才跑，避免偷偷吃流量）。
+  /// 只测前 6 条、每条采 1 段，够横向比较又不会太贵。
+  Future<void> _measureAll(List<MediaResource> list) async {
+    if (_measuring) return;
+    // 一次最多 6 条 × 2 段，实测每秒几 MB 的采样量，先问一句
+    if (!_trafficNoticeShown) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('测清晰度会消耗流量'),
+          content: const Text(
+            '会对前 6 个候选片源各下载 2 小段视频（每段不超过 2MB）来估算码率，'
+            '用于比较哪个更清晰。建议在 Wi-Fi 下进行。',
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('开始测量')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+      _trafficNoticeShown = true;
+    }
+    setState(() => _measuring = true);
+    final targets = list.take(6).toList();
+    var next = 0;
+
+    // 3 个并发：单条约 2~3 秒，串行测 6 条要十几秒，太慢
+    Future<void> worker() async {
+      while (true) {
+        final i = next++;
+        if (i >= targets.length) return;
+        final r = targets[i];
+        final group = r.defaultGroup;
+        final url = (group != null && group.episodes.isNotEmpty)
+            ? group.episodes.first.url
+            : null;
+        if (url == null) continue;
+        final headers = {
+          'User-Agent': kBrowserUserAgent,
+          if (Uri.tryParse(url)?.hasAuthority ?? false)
+            'Referer': '${Uri.parse(url).scheme}://${Uri.parse(url).authority}/',
+        };
+        final estimate = await BitrateProbe.instance.probe(
+          url,
+          headers: headers,
+          segments: BitrateProbe.defaultSegments,
+        );
+        if (!mounted) return;
+        setState(() => _bitrates[r.key] = estimate);
+      }
+    }
+
+    await Future.wait(List.generate(3, (_) => worker()));
+    if (mounted) setState(() => _measuring = false);
+  }
+
+  /// 行尾的码率标记：` · ≈1.3 Mbps 一般`
+  String _bitrateSuffix(MediaResource r) {
+    if (!_bitrates.containsKey(r.key)) return '';
+    final e = _bitrates[r.key];
+    if (e == null) return ' · 测不了';
+    return ' · ≈${e.label} ${e.grade}';
+  }
+
+  /// 测过的按码率降序排前面，没测的保持原有匹配度顺序
+  List<MediaResource> _sorted(List<MediaResource> base) {
+    if (_bitrates.isEmpty) return base;
+    final measured = base
+        .where((r) => _bitrates[r.key] != null)
+        .toList()
+      ..sort((a, b) => BitrateProbe.compare(_bitrates[b.key], _bitrates[a.key]));
+    final rest = base.where((r) => _bitrates[r.key] == null).toList();
+    return [...measured, ...rest];
+  }
+
   @override
   void dispose() {
     _sub?.cancel();
@@ -1717,8 +1805,9 @@ class _SourceSheetState extends State<_SourceSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final list =
-        rankResources(_items, widget.title, year: widget.year).take(40).toList();
+    final list = _sorted(
+      rankResources(_items, widget.title, year: widget.year).take(40).toList(),
+    );
     return SafeArea(
       child: SizedBox(
         height: MediaQuery.of(context).size.height * 0.7,
@@ -1740,6 +1829,22 @@ class _SourceSheetState extends State<_SourceSheet> {
                     style:
                         TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
                   ),
+                  if (!_loading && list.isNotEmpty)
+                    TextButton.icon(
+                      onPressed:
+                          _measuring ? null : () => _measureAll(list),
+                      icon: _measuring
+                          ? const SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.speed_rounded, size: 16),
+                      label: Text(
+                        _measuring ? '测量中' : '测清晰度',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1775,10 +1880,16 @@ class _SourceSheetState extends State<_SourceSheet> {
                           subtitle: Text(
                             '${r.siteName} · ${r.groups.length} 线路 · '
                             '${r.episodeCount} 集'
-                            '${r.remarks.isEmpty ? '' : ' · ${r.remarks}'}',
+                            '${r.remarks.isEmpty ? '' : ' · ${r.remarks}'}'
+                            '${_bitrateSuffix(r)}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: (_bitrates[r.key]?.kbps ?? 0) >= 2000
+                                  ? scheme.primary
+                                  : null,
+                            ),
                           ),
                           trailing: isCurrent
                               ? null

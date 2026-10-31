@@ -52,12 +52,14 @@ class _SourceDiscoveryPageState extends State<SourceDiscoveryPage> {
 
   // ------------------------------------------------------------ 流程
 
-  /// 「开始自动搜索」：拉清单 + 并发探测
-  Future<void> _autoSearch() async {
+  /// 「开始自动搜索」：拉清单 + 并发探测。
+  /// [catalogs] 传值时用指定清单（「找 4K/高清源」走这条），不覆盖用户填的地址。
+  Future<void> _autoSearch({List<String>? catalogs}) async {
     final url = _catalogCtrl.text.trim();
-    await sourceStore.setCatalogUrl(url);
+    if (catalogs == null) await sourceStore.setCatalogUrl(url);
     // 用户没填地址时走内置源，做到「点一下就能搜」
-    final urls = url.isEmpty ? kDefaultCatalogUrls : <String>[url];
+    final urls = catalogs ??
+        (url.isEmpty ? kDefaultCatalogUrls : <String>[url]);
     setState(() {
       _fetching = true;
       _notice = null;
@@ -293,18 +295,26 @@ class _SourceDiscoveryPageState extends State<SourceDiscoveryPage> {
               style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 8),
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 FilledButton.icon(
                   onPressed: _fetching || _probing ? null : _autoSearch,
                   icon: const Icon(Icons.auto_awesome_rounded, size: 18),
                   label: const Text('开始自动搜索'),
                 ),
-                const SizedBox(width: 8),
                 OutlinedButton.icon(
                   onPressed: _fetching || _probing ? null : _pasteAndSearch,
                   icon: const Icon(Icons.content_paste_rounded, size: 18),
                   label: const Text('粘贴地址列表'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: _fetching || _probing
+                      ? null
+                      : () => _autoSearch(catalogs: kHdCatalogUrls),
+                  icon: const Icon(Icons.hd_rounded, size: 18),
+                  label: const Text('找 4K/高清源'),
                 ),
               ],
             ),
@@ -372,6 +382,7 @@ class _SourceDiscoveryPageState extends State<SourceDiscoveryPage> {
           const SizedBox(height: 6),
           Text(
             '应用会拉取内置清单源、并发探测每个采集接口，\n列出可用/不可用，再由你勾选决定添加哪些。\n'
+            '\n想找更清晰的片源？点下面的「找 4K/高清源」再搜一轮。\n'
             '想换成自己的清单，把地址填到上面即可。',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, height: 1.6, color: scheme.onSurfaceVariant),
