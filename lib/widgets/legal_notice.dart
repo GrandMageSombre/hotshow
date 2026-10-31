@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 
 /// 使用声明：本软件为 umena 个人自用，禁止商业使用。
@@ -11,6 +12,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 class LegalNotice {
   static const String appName = '热剧速览';
   static const String owner = 'umena';
+
+  /// 项目仓库：反馈、侵权处理、Star 都指向这里
+  static const String repoUrl = 'https://github.com/GrandMageSombre/hotshow';
+  static const String repoLabel = 'github.com/GrandMageSombre/hotshow';
 
   /// 启动时是否显示声明的开关（默认开）
   static const String onLaunchKey = 'legal_notice_on_launch';
@@ -115,6 +120,27 @@ class _LegalNoticeDialog extends StatefulWidget {
 class _LegalNoticeDialogState extends State<_LegalNoticeDialog> {
   late bool _showOnLaunch = widget.initialOnLaunch;
 
+  /// 打开仓库页；打不开就给一句提示，别静默失败
+  Future<void> _openRepo(BuildContext context) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      final ok = await launchUrl(
+        Uri.parse(LegalNotice.repoUrl),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!ok) {
+        messenger?.showSnackBar(
+          const SnackBar(content: Text('无法打开浏览器，地址：${LegalNotice.repoLabel}')),
+        );
+      }
+    } catch (e) {
+      debugPrint('LegalNotice: 打开仓库失败 $e');
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('无法打开浏览器，地址：${LegalNotice.repoLabel}')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -191,14 +217,39 @@ class _LegalNoticeDialogState extends State<_LegalNoticeDialog> {
                             '因使用或传播产生的后果由使用者自行承担。',
                       ),
                       const _Point(
-                        '侵权处理',
-                        '权利人可通过项目 issue（GitHub @GrandMageSombre）联系作者，收悉后及时处理。',
+                        '联系与侵权处理',
+                        '问题反馈、建议、侵权处理都走 GitHub 仓库：'
+                            '${LegalNotice.repoUrl}'
+                            '（可直接提 issue），收悉后及时处理。',
+                      ),
+                      const _Point(
+                        '支持作者',
+                        '如果这个软件对你有用，欢迎到上面的 GitHub 仓库点一个 Star——'
+                            '这是对个人开发者最直接的支持，也不花钱。',
                       ),
                       const SizedBox(height: 10),
                       Text(
                         '本声明是使用提示与许可摘要，具体条款以项目 LICENSE 为准；继续使用即表示你已知悉。',
                         style:
                             TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                      ),
+                      const SizedBox(height: 6),
+                      // 直接给一个能点的入口：让人想支持时不用自己去搜仓库
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: () => _openRepo(context),
+                          icon: const Icon(Icons.star_rounded, size: 18),
+                          label: const Text(
+                            '去 GitHub 点个 Star',
+                            style: TextStyle(fontSize: 12),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                          ),
+                        ),
                       ),
                     ],
                   ),
