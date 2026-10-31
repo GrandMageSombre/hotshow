@@ -64,6 +64,39 @@ const List<String> kDefaultCatalogUrls = [
   'https://cdn.jsdelivr.net/gh/gaotianliuyun/gao@master/0821.json',
 ];
 
+/// 一条预设清单（TVBox / 影视仓生态里公开分发的配置）。
+class CatalogPreset {
+  final String name;
+  final String url;
+  final String note;
+  const CatalogPreset(this.name, this.url, this.note);
+}
+
+/// 预设清单：都是**公开分发的配置地址**，不是具体影视站点。
+/// App 仍然只做「拉取 → 解析 → 逐个探测可用性 → 你勾选后添加」，
+/// 所以列在这里不等于「内置了资源站」。
+///
+/// 这些地址会失效/换域名，属于常态；留着的意义是「少让你自己去搜一遍」。
+const List<CatalogPreset> kPresetCatalogs = [
+  CatalogPreset('摸鱼', 'https://6800.kstore.vip/fish.json', '标称 4K 资源'),
+  CatalogPreset('王二小', 'https://d.kstore.dev/download/9280/wex.json', '多源聚合'),
+  CatalogPreset('无邪多仓',
+      'https://gh-proxy.com/https://raw.githubusercontent.com/wxrjck/-YSC-/refs/heads/main/wx.json',
+      '多仓，内含多个子仓'),
+  CatalogPreset('老刘备',
+      'https://ghfast.top/https://raw.githubusercontent.com/liu673cn/box/main/m.json',
+      'GitHub 镜像'),
+  CatalogPreset('分享',
+      'https://ghproxy.net/https://raw.githubusercontent.com/maoystv/6/main/001.json',
+      'GitHub 镜像'),
+  CatalogPreset('高天流云',
+      'https://gh-proxy.com/https://raw.githubusercontent.com/gaotianliuyun/gao/master/js.json',
+      'GitHub 镜像'),
+  CatalogPreset('潇洒', 'https://9877.kstore.space/AnotherDS/api.json', '单仓'),
+  CatalogPreset('儿童专线',
+      'https://jihulab.com/ymz1231/xymz/-/raw/main/ymshaoer', '少儿向'),
+];
+
 /// 「高清/4K 向」的公开清单（TVBox 生态里流传的 4K 配置）。
 ///
 /// 这些地址连通性因网络而异，所以**不当成默认源**，只在用户主动点「找 4K/高清源」时试；
@@ -96,7 +129,32 @@ class SourceDiscovery {
   /// - JSON 数组：`["https://…/api.php/provide/vod"]` 或 `[{"name":…,"api":…}]`
   /// - JSON 对象：`{"sites":[…]}` / `{"list":[…]}` 等（含 TVBox 风格配置，
   ///   会从 `ext` 里的 `site` 字段还原出 maccms 接口地址）
-  Future<CatalogParseResult> fetchCatalog(String url) async {
+  /// 多仓配置里的子仓地址（TVBox 的 `urls: [{name,url}]`）。
+  /// 只认 http(s) 且看起来是配置文件的地址，最多 8 个，避免被超大仓库拖死。
+  static List<String> subCatalogUrls(String content) {
+    try {
+      final decoded = jsonDecode(content);
+      if (decoded is! Map) return const [];
+      final urls = decoded['urls'];
+      if (urls is! List) return const [];
+      final out = <String>[];
+      for (final e in urls) {
+        final raw = e is Map ? e['url'] : e;
+        if (raw is! String) continue;
+        final u = raw.trim();
+        if (!u.startsWith('http://') && !u.startsWith('https://')) continue;
+        if (out.contains(u)) continue;
+        out.add(u);
+        if (out.length >= 8) break;
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// [depth] 只用于内部递归：多仓跟进一层就够，再深容易滚雪球
+  Future<CatalogParseResult> fetchCatalog(String url, {int depth = 0}) async {
     final trimmed = url.trim();
     if (!SourceSite.isValidApi(trimmed)) {
       return const CatalogParseResult(warnings: ['清单地址不合法（需 http:// 或 https:// 开头）']);
@@ -104,10 +162,18 @@ class SourceDiscovery {
     try {
       final body = await _getText(Uri.parse(trimmed));
       final candidates = parseCatalog(body);
-      if (candidates.isEmpty) {
+      // 多仓：把子仓里的采集接口也收进来（这正是「无邪多仓」这类配置的价值）
+      if (depth == 0) {
+        for (final sub in subCatalogUrls(body)) {
+          final r = await fetchCatalog(sub, depth: 1);
+          candidates.addAll(r.candidates);
+        }
+      }
+      final merged = _dedupe(candidates);
+      if (merged.isEmpty) {
         return const CatalogParseResult(warnings: ['清单里没有解析出可用的采集接口地址']);
       }
-      return CatalogParseResult(candidates: candidates);
+      return CatalogParseResult(candidates: merged);
     } catch (e) {
       return CatalogParseResult(warnings: [describeNetworkError(e)]);
     }
@@ -202,9 +268,14 @@ class SourceDiscovery {
   /// 此时到 `ext` 里找真正的站点地址；`ext` 也可能直接就是一个站点 URL。
   static String? _resolveApi(String api, Map<dynamic, dynamic> node) {
     if (api.startsWith('http://') || api.startsWith('https://')) {
-      // drpy / JS 脚本源不是采集接口，带上只会污染探测结果
+      // drpy / JS 脚本源、以及多仓里的子配置（.json/.txt）都不是采集接口，
+      // 带上只会污染探测结果——注意要在 _toMaccmsApi 补全路径**之前**判断
       final path = Uri.tryParse(api)?.path.toLowerCase() ?? '';
-      if (path.endsWith('.js')) return null;
+      if (path.endsWith('.js') ||
+          path.endsWith('.json') ||
+          path.endsWith('.txt')) {
+        return null;
+      }
       return _toMaccmsApi(api);
     }
 
@@ -312,6 +383,18 @@ class SourceDiscovery {
     }
     final uri = Uri.tryParse(s);
     if (uri == null || uri.host.isEmpty) return null;
+
+    // 多仓配置里 urls[] 指向的是「另一份配置」，drpy 源是脚本——都不是采集接口，
+    // 拿去探测只会白跑，这里直接剔掉（真正的采集接口是 api.php/provide/vod）
+    final lowerPath = uri.path.toLowerCase();
+    if (lowerPath.endsWith('.json') ||
+        lowerPath.endsWith('.txt') ||
+        lowerPath.endsWith('.js') ||
+        lowerPath.contains('.json/') ||
+        lowerPath.contains('.txt/') ||
+        lowerPath.contains('.js/')) {
+      return null;
+    }
 
     // 只给了站点根（没有具体路径）时按 maccms 约定补全
     if (uri.path.isEmpty || uri.path == '/') {

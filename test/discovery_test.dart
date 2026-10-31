@@ -444,4 +444,40 @@ https://b.example.com/api.php/provide/vod/
       expect(res.candidates.map((c) => c.name), ['A站', 'B站']);
     });
   });
+
+  group('多仓清单与配置文件过滤', () {
+    test('能识别 urls[] 里的子仓地址（去重、只认 http(s)、最多 8 个）', () {
+      final body = jsonEncode({
+        'urls': [
+          {'name': 'a', 'url': 'https://a.example.com/1.json'},
+          {'name': 'b', 'url': 'https://b.example.com/2.json'},
+          'https://c.example.com/3.json',
+          {'name': 'bad', 'url': 'ftp://d.example.com/4.json'},
+          {'name': 'dup', 'url': 'https://a.example.com/1.json'},
+        ]
+      });
+      expect(SourceDiscovery.subCatalogUrls(body), [
+        'https://a.example.com/1.json',
+        'https://b.example.com/2.json',
+        'https://c.example.com/3.json',
+      ]);
+    });
+
+    test('非多仓清单返回空，不抛异常', () {
+      expect(SourceDiscovery.subCatalogUrls('{"sites":[]}'), isEmpty);
+      expect(SourceDiscovery.subCatalogUrls('not json'), isEmpty);
+    });
+
+    test('配置文件地址不会被当成采集接口', () {
+      final list = SourceDiscovery.parseCatalog(jsonEncode({
+        'sites': [
+          {'name': '子仓', 'url': 'https://a.example.com/sub.json'},
+          {'name': '脚本源', 'api': 'https://b.example.com/js/drpy.js'},
+          {'name': '真站', 'api': 'https://c.example.com/api.php/provide/vod'},
+        ]
+      }));
+      expect(list.map((e) => e.api).toList(),
+          ['https://c.example.com/api.php/provide/vod']);
+    });
+  });
 }

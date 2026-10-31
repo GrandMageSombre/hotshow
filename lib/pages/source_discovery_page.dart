@@ -57,9 +57,14 @@ class _SourceDiscoveryPageState extends State<SourceDiscoveryPage> {
   Future<void> _autoSearch({List<String>? catalogs}) async {
     final url = _catalogCtrl.text.trim();
     if (catalogs == null) await sourceStore.setCatalogUrl(url);
-    // 用户没填地址时走内置源，做到「点一下就能搜」
+    // 支持一次贴多条（换行/逗号分隔）；留空则走内置源
+    final pasted = url
+        .split(RegExp(r'[\n,，;；]'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
     final urls = catalogs ??
-        (url.isEmpty ? kDefaultCatalogUrls : <String>[url]);
+        (pasted.isEmpty ? kDefaultCatalogUrls : pasted);
     setState(() {
       _fetching = true;
       _notice = null;
@@ -288,6 +293,33 @@ class _SourceDiscoveryPageState extends State<SourceDiscoveryPage> {
             Text(
               '留空时会自动使用内置源：${kDefaultCatalogUrls.join('、')}',
               style: TextStyle(fontSize: 11, color: scheme.primary),
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '或点一个公开清单直接搜（这些是配置地址，不是资源站；'
+                '能不能用由 App 现场探测决定）',
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final p in kPresetCatalogs)
+                  Tooltip(
+                    message: p.note,
+                    child: ActionChip(
+                      label: Text(p.name, style: const TextStyle(fontSize: 12)),
+                      visualDensity: VisualDensity.compact,
+                      onPressed: _fetching || _probing
+                          ? null
+                          : () => _autoSearch(catalogs: [p.url]),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(height: 2),
             Text(
