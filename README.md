@@ -27,11 +27,12 @@
    用当前 HEAD 去 `flutter build windows` 如果失败，属于「不维护」的正常状态。
 2. **想回到 v1.8.0 的三端版本，得按 tag 取**，不能直接用最新代码编译：
    ```bash
-   git checkout v1.8.0     # 该 tag 是最后一份三端完整可构建的代码
+   git fetch --tags
+   git checkout v1.8.0     # 打好的 tag，是最后一份三端完整可构建的代码
    flutter pub get && flutter build windows   # 或 macos / ios
    ```
    直接拿 HEAD 编译出来的 Windows 包**会带上 v1.9.0 的新功能**（因为代码是同一份），
-   那不是「v1.8.0 的 Windows 版」。
+   那不是「v1.8.0 的 Windows 版」。仓库里已有 `v1.8.0`、`v1.9.0` 两个 tag。
 3. **旧包就在 `releases/` 里**：`spgj-v1.8.0-ios-unsigned.ipa`、`spgj-v1.8.0-windows-x64.zip`，
    以及 `spgj-v1.8.0-android.apk`。这些文件不会再更新，但也不会被删。
 
