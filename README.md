@@ -2,12 +2,38 @@
 
 > **使用声明**：本项目是 **umena 的个人自用软件**，不是商业产品，**禁止任何形式的商业使用**
 > （售卖、出租、捆绑、代运营、广告变现等）。详见 [LICENSE](LICENSE)。
-> 应用内每个版本首次启动都会弹出该声明，首页右上角「i」可随时重看。
+> 应用内每次冷启动都会弹出该声明（可在弹窗底部关掉自动弹出），首页右上角「i」可随时重看。
 
-实时热播 **电视剧 / 电影 / 短剧 / 动漫** 聚合搜索应用，一套 Flutter 代码同时支持 **Windows / Android / macOS / iOS**。
+实时热播 **电视剧 / 电影 / 短剧 / 动漫** 聚合搜索应用，Flutter 实现。
 发现好剧 → 一键检索完整片源 → 内置播放器直接看，支持选集、倍速与离线缓存。
 
-![平台](https://img.shields.io/badge/平台-Windows%20%7C%20Android%20%7C%20macOS%20%7C%20iOS-blue) ![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter)
+![平台](https://img.shields.io/badge/平台-Android%20（仅此端维护）-3DDC84?logo=android) ![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter)
+
+## ⚠️ 平台维护状态（重要）
+
+| 平台 | 状态 | 说明 |
+|------|------|------|
+| **Android** | ✅ **持续维护** | 后续版本只在这里修 bug、加功能、出包（`releases/spgj-*-android.apk`） |
+| Windows | 🧊 冻结在 **v1.8.0** | 自 **v1.9.0** 起**不再维护**：不再构建、不再修 bug、不再适配新功能。仓库里 `windows/` 与相关代码保留原样，方便自己拉下来编译，但作者不再投入 |
+| macOS | 🧊 冻结在 **v1.8.0** | 自 **v1.9.0** 起**不再维护**，同上 |
+| iOS | 🧊 冻结在 **v1.8.0** | 自 **v1.9.0** 起**不再维护**：不再触发 GitHub Actions 出未签名 IPA。`releases/spgj-v1.8.0-ios-unsigned.ipa` 是最后一份 |
+
+也就是说：**v1.9.0 及以后的安装包只有 Android**。
+
+需要说清楚的三点：
+
+1. **代码没被删**。这是单代码库，`windows/`、`macos/`、`ios/` 目录和平台相关分支都还在；
+   但从 v1.9.0 起，作者不再为这三端构建、不再修它们的 bug、也不保证新功能在上面能用。
+   用当前 HEAD 去 `flutter build windows` 如果失败，属于「不维护」的正常状态。
+2. **想回到 v1.8.0 的三端版本，得按 tag 取**，不能直接用最新代码编译：
+   ```bash
+   git checkout v1.8.0     # 该 tag 是最后一份三端完整可构建的代码
+   flutter pub get && flutter build windows   # 或 macos / ios
+   ```
+   直接拿 HEAD 编译出来的 Windows 包**会带上 v1.9.0 的新功能**（因为代码是同一份），
+   那不是「v1.8.0 的 Windows 版」。
+3. **旧包就在 `releases/` 里**：`spgj-v1.8.0-ios-unsigned.ipa`、`spgj-v1.8.0-windows-x64.zip`，
+   以及 `spgj-v1.8.0-android.apk`。这些文件不会再更新，但也不会被删。
 
 ## 功能
 
@@ -28,14 +54,15 @@
 
 ## 技术实现
 
-- **框架**: Flutter (Material 3)，单代码库 → Android APK / Windows EXE / macOS .app / iOS（自签）
+- **框架**: Flutter (Material 3)。**当前只维护 Android**；Windows / macOS / iOS 的工程文件保留但冻结在 v1.8.0（见上方「平台维护状态」）
 - **元数据源**: 豆瓣公开数据（未官方授权，仅供学习）
   - 榜单：`m.douban.com/rexxar/api/v2/subject_collection/*`（网页端集合接口）
   - 短剧/网剧/动漫标签聚合：`frodo.douban.com/api/v2/tv/recommend`（App 端接口，HMAC-SHA1 请求签名）
   - 搜索：`frodo.douban.com/api/v2/search/subjects`
   - 详情：`frodo.douban.com/api/v2/tv/{id}` / `movie/{id}`
 - **播放源**: 第三方影视采集站（maccms / 苹果CMS 的 `api.php/provide/vod` 接口），按片名检索后解析 `vod_play_from` + `vod_play_url` 得到多线路、全部分集的播放地址；站点通过「自动搜索」从公开清单源发现，代码里不写死任何站点地址
-- **播放器**: [`media_kit`](https://github.com/media-kit/media-kit)（libmpv），Windows 与 Android 双端原生播放 HLS/m3u8，播放/进度/全屏由 `media_kit_video` 的 AdaptiveVideoControls 承担，选集、倍速、缓存按钮为自绘
+- **播放器**: [`media_kit`](https://github.com/media-kit/media-kit)（libmpv）原生播放 HLS/m3u8，播放/进度/全屏由 `media_kit_video` 的 AdaptiveVideoControls 承担，选集、倍速、缓存按钮为自绘；手势层（左音量/右亮度/横向进度）用 `Listener` 旁观裸指针实现，不抢控件的手势
+- **起播优化**: 起播前给 mpv 设 `cache-secs / demuxer-readahead-secs / network-timeout`（**不动 `hls-bitrate`，清晰度不降档**）；清晰度探测等首帧之后再做，且 master 码率表按地址缓存 10 分钟、并发合并且预热下一集——起播阶段不再和自己的探测请求抢带宽
 - **离线缓存**: 自研 m3u8 解析（master 码流选择、`EXT-X-KEY` 逐分片密钥、`EXT-X-MAP`）+ 4 并发分片下载 + 本地播放列表重写，落盘后断网可播
 - **在线字幕**: OpenSubtitles（`api.opensubtitles.com/api/v1`）+ 免 Key 的旧站下载通道 `dl.opensubtitles.org/en/download/sub/{legacy_id}`；自研 zip/gzip 解包（中央目录 + stored/deflate）、编码识别（UTF-8 / UTF-16 BOM / GBK）、字幕统一转 UTF-8 落盘；时间轴调整走 libmpv 的 `sub-delay` 实时生效，不支持时回退到重写字幕文件
 - **网络图片**: 豆瓣图床的 WAF 对图片请求有两条硬规则（都返回 403/418）——

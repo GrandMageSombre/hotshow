@@ -46,8 +46,12 @@ class QualityOption {
 
 /// 清晰度探测：抓一次 m3u8，若是 master playlist 就列出各码率变体。
 ///
-/// 只做「读一次文本」，不下载分片；失败一律返回空列表（拿不到就不显示切换入口，
-/// 不要让探测失败影响播放）。
+/// 只读一次文本，不下载分片；失败一律返回空列表（拿不到就不显示切换入口，
+/// 探测失败不能影响播放）。
+///
+/// 两个为了「不拖慢起播」的设计：
+/// - **结果缓存**：同一个 master 地址在 TTL 内只抓一次（切集回来、重看都命中）；
+/// - **并发合并**：同一地址同时被请求时共用一个 Future，不会重复下载。
 class QualityService {
   static final QualityService instance = QualityService._();
   QualityService._();
@@ -55,37 +59,150 @@ class QualityService {
   /// master playlist 本身很小（几 KB），超过这个大小基本说明抓到的是分片列表
   static const int _maxBytes = 512 * 1024;
 
+  /// 探测结果缓存时长：片源的码率表不会频繁变，10 分钟足够
+  static const Duration cacheTtl = Duration(minutes: 10);
+
+  /// 复用同一个 HttpClient，省掉每次探测重新握手
+  final HttpClient _http = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 6)
+    ..autoUncompress = true;
+
+  final Map<String, _ProbeEntry> _cache = {};
+  final Map<String, Future<List<QualityOption>>> _inflight = {};
+
+  /// 缓存里的命中数/未命中数，仅用于自检与测试
+  int cacheHits = 0;
+  int cacheMisses = 0;
+
+  /// 仅供测试注入：返回 null 表示「抓取失败」。
+  /// （本文件要保持纯 Dart，不能引 flutter/foundation 的 @visibleForTesting，
+  ///  否则 `dart run tool/quality_probe.dart` 跑不起来。）
+  Future<String?> Function(String url, Map<String, String> headers)?
+      debugFetchOverride;
+
   Future<List<QualityOption>> probe(
     String url, {
     Map<String, String> headers = const {},
     Duration timeout = const Duration(seconds: 6),
-  }) async {
+    bool useCache = true,
+  }) {
+    if (!_looksLikePlaylist(url)) return Future.value(const []);
+    final key = _cacheKey(url, headers);
+
+    if (useCache) {
+      final hit = _cache[key];
+      if (hit != null && !hit.expired) {
+        cacheHits++;
+        return Future.value(hit.options);
+      }
+      // 过期条目顺手删掉，别让单例里的 Map 无限长
+      if (hit != null) _cache.remove(key);
+    }
+    _pruneIfNeeded();
+
+    // 同一地址正在探测：直接复用，避免快速换集时堆一串请求
+    final running = _inflight[key];
+    if (running != null) return running;
+
+    cacheMisses++;
+    final future = _fetch(url, headers, timeout)
+        .then((options) {
+          _cache[key] = _ProbeEntry(
+            options,
+            DateTime.now().add(cacheTtl),
+          );
+          return options;
+        })
+        .whenComplete(() {
+          // 注意别写成 `=> _inflight.remove(key)`：remove 返回的就是这个 Future 本身，
+          // whenComplete 会等它完成 → 自己等自己，直接死锁
+          _inflight.remove(key);
+        });
+    _inflight[key] = future;
+    return future;
+  }
+
+  /// 清空缓存（片源换域名 / 调试用）
+  void clearCache() {
+    _cache.clear();
+  }
+
+  /// 已缓存的码率表（同步）；没有/过期返回 null。
+  /// 播放页用它判断「记忆的清晰度能不能零成本应用」。
+  List<QualityOption>? cachedOptions(
+    String url, {
+    Map<String, String> headers = const {},
+  }) {
+    final hit = _cache[_cacheKey(url, headers)];
+    if (hit == null || hit.expired) return null;
+    return hit.options;
+  }
+
+  /// 该地址的码率表是否已在缓存里
+  bool isCached(String url, {Map<String, String> headers = const {}}) =>
+      cachedOptions(url, headers: headers) != null;
+
+  /// 缓存 key：影响响应的头里只有 Referer 会变（UA 是全局常量）
+  static String _cacheKey(String url, Map<String, String> headers) =>
+      '$url|${headers['Referer'] ?? ''}';
+
+  /// 条目数超限时清一次过期项；片源地址很多时不至于无限涨
+  void _pruneIfNeeded() {
+    if (_cache.length <= 64) return;
+    _cache.removeWhere((_, v) => v.expired);
+  }
+
+  Future<List<QualityOption>> _fetch(
+    String url,
+    Map<String, String> headers,
+    Duration timeout,
+  ) async {
     final uri = Uri.tryParse(url);
-    if (uri == null || !_looksLikePlaylist(url)) return const [];
-    final client = HttpClient()..connectionTimeout = timeout;
+    if (uri == null) return const [];
     try {
-      final req = await client.getUrl(uri);
-      headers.forEach((k, v) => req.headers.set(k, v));
-      final resp = await req.close().timeout(timeout);
-      if (resp.statusCode != 200) return const [];
-      final bytes = await resp
-          .fold<List<int>>(<int>[], (a, b) => a..addAll(b))
-          .timeout(timeout);
-      if (bytes.isEmpty || bytes.length > _maxBytes) return const [];
-      final text = utf8.decode(bytes, allowMalformed: true);
+      final String text;
+      final override = debugFetchOverride;
+      if (override != null) {
+        final injected = await override(url, headers);
+        if (injected == null) return const [];
+        text = injected;
+      } else {
+        final req = await _http.getUrl(uri);
+        headers.forEach((k, v) => req.headers.set(k, v));
+        final resp = await req.close().timeout(timeout);
+        if (resp.statusCode != 200) return const [];
+        final bytes = await resp
+            .fold<List<int>>(<int>[], (a, b) => a..addAll(b))
+            .timeout(timeout);
+        if (bytes.isEmpty || bytes.length > _maxBytes) return const [];
+        text = utf8.decode(bytes, allowMalformed: true);
+      }
+      // 有些站点用 .php / 无扩展名的地址出口，靠内容前缀再确认一次
+      if (!text.trimLeft().startsWith('#EXTM3U')) return const [];
       return optionsFromPlaylist(parseM3u8(text, uri));
     } catch (_) {
       // 网络异常 / 超时 / 编码问题：静默降级为「没有更多清晰度」
       return const [];
-    } finally {
-      client.close(force: true);
     }
   }
 
+  /// `.php` 或无扩展名的地址也可能返回 master playlist；
+  /// 只排除明确的媒体文件后缀，避免对 mp4/flv 白发请求
   static bool _looksLikePlaylist(String url) {
-    final u = url.toLowerCase();
-    return u.contains('.m3u8') || u.contains('m3u8');
+    final path = Uri.tryParse(url)?.path.toLowerCase() ?? url.toLowerCase();
+    if (path.isEmpty) return false;
+    if (RegExp(r'\.(mp4|flv|mkv|ts|mov|m4v|avi|webm)$').hasMatch(path)) {
+      return false;
+    }
+    return true;
   }
+}
+
+class _ProbeEntry {
+  final List<QualityOption> options;
+  final DateTime expiresAt;
+  const _ProbeEntry(this.options, this.expiresAt);
+  bool get expired => DateTime.now().isAfter(expiresAt);
 }
 
 /// 全局单例（与 offlineCache / subtitleStore 等保持同一风格）
@@ -128,7 +245,6 @@ List<QualityOption> optionsFromPlaylist(M3u8Playlist playlist) {
     if (!usedLabels.add(label)) continue;
     out.add(QualityOption(
       label: label,
-      // 同清晰度有多个码率时，把码率写进副标题以免看起来重复
       detail: variantDetail(v.resolution, v.bandwidth),
       url: key,
       rank: resolutionHeight(v.resolution) * 1000000 + v.bandwidth,

@@ -11,6 +11,36 @@ const double kDragSlop = 8;
 /// 定值而不是按时长比例：两小时的电影按时长比例会让 100dp 就跳几分钟，太灵敏。
 const double kSeekSecondsPerScreen = 180;
 
+/// 手势参数。默认值就是真机上手感调好的那套；抽成配置对象是为了
+/// 以后能按设备调（平板/电视远距离操作需要更钝一些的灵敏度）。
+class GestureConfig {
+  /// 判定为「一次拖动」的最小位移
+  final double dragSlop;
+
+  /// 横向拖满整屏对应的进度跨度（秒）
+  final double seekSecondsPerScreen;
+
+  /// 亮度下限（别让人觉得播放器黑了）
+  final double minBrightness;
+
+  /// 底部留给播放控件条的高度，这一带不接管手势
+  final double controlsBarHeight;
+
+  const GestureConfig({
+    this.dragSlop = kDragSlop,
+    this.seekSecondsPerScreen = kSeekSecondsPerScreen,
+    this.minBrightness = 0.05,
+    this.controlsBarHeight = 64,
+  });
+
+  /// 更钝的一套：电视/平板远距离操作时用
+  static const GestureConfig comfortable = GestureConfig(
+    dragSlop: 12,
+    seekSecondsPerScreen: 240,
+    controlsBarHeight: 72,
+  );
+}
+
 /// 拖动落在屏幕哪半边（以**按下时**的横坐标判定，拖过中线也不会突然换功能）
 enum GestureSide { left, right }
 
@@ -20,16 +50,17 @@ enum PlayerGestureMode { none, volume, brightness, seek }
 GestureSide sideOf(double x, double width) =>
     x < width / 2 ? GestureSide.left : GestureSide.right;
 
-/// 根据累计位移判定手势类型；位移不足 [kDragSlop] 时返回 none（当点击处理）。
+/// 根据累计位移判定手势类型；位移不足 `slop` 时返回 none（当点击处理）。
 PlayerGestureMode dragMode({
   required double dx,
   required double dy,
   required double startX,
   required double width,
+  double slop = kDragSlop,
 }) {
   final ax = dx.abs();
   final ay = dy.abs();
-  if (ax < kDragSlop && ay < kDragSlop) return PlayerGestureMode.none;
+  if (ax < slop && ay < slop) return PlayerGestureMode.none;
   if (ay >= ax) {
     return sideOf(startX, width) == GestureSide.left
         ? PlayerGestureMode.volume
@@ -61,9 +92,10 @@ Duration seekTargetFromDrag({
   required Duration duration,
   required double dx,
   required double width,
+  double secondsPerScreen = kSeekSecondsPerScreen,
 }) {
   if (width <= 0 || duration <= Duration.zero) return position;
-  final deltaMs = dx / width * kSeekSecondsPerScreen * 1000;
+  final deltaMs = dx / width * secondsPerScreen * 1000;
   final ms = (position.inMilliseconds + deltaMs)
       .round()
       .clamp(0, duration.inMilliseconds);

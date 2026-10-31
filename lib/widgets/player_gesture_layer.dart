@@ -34,9 +34,8 @@ class PlayerGestureLayer extends StatefulWidget {
   /// 关掉后忽略手势（例如正在打开新片源时避免误触）
   final bool enabled;
 
-  /// 底部留给播放控件条的高度：进度条就在这一带，让它自己处理拖动，
-  /// 否则「拖动进度条」会同时触发本层的手势，松手时位置跳两次
-  final double controlsBarHeight;
+  /// 手感参数（灵敏度/满屏秒数/底部留白），默认值在 [GestureConfig] 里
+  final GestureConfig config;
 
   const PlayerGestureLayer({
     super.key,
@@ -48,7 +47,7 @@ class PlayerGestureLayer extends StatefulWidget {
     required this.onBrightnessChanged,
     required this.onSeek,
     this.enabled = true,
-    this.controlsBarHeight = 64,
+    this.config = const GestureConfig(),
   });
 
   @override
@@ -56,9 +55,6 @@ class PlayerGestureLayer extends StatefulWidget {
 }
 
 class _PlayerGestureLayerState extends State<PlayerGestureLayer> {
-  /// 亮度下限：留一点画面，别让人以为播放器黑了
-  static const double _minBrightness = 0.05;
-
   PlayerGestureMode _mode = PlayerGestureMode.none;
   int? _pointer;
   double _startX = 0;
@@ -84,7 +80,7 @@ class _PlayerGestureLayerState extends State<PlayerGestureLayer> {
     if (_pointer != null) return; // 已在拖动，忽略第二根手指
     // 底部控件条（进度条）区域不接管，交给 media_kit 自己的拖动逻辑
     if (e.localPosition.dy >
-        size.height - widget.controlsBarHeight) {
+        size.height - widget.config.controlsBarHeight) {
       return;
     }
     _pointer = e.pointer;
@@ -106,6 +102,7 @@ class _PlayerGestureLayerState extends State<PlayerGestureLayer> {
         dy: _accumDy,
         startX: _startX,
         width: size.width,
+        slop: widget.config.dragSlop,
       );
       if (mode == PlayerGestureMode.none) return;
       _mode = mode;
@@ -141,7 +138,7 @@ class _PlayerGestureLayerState extends State<PlayerGestureLayer> {
           dy: _accumDy,
           height: size.height,
           span: 1,
-          min: _minBrightness,
+          min: widget.config.minBrightness,
           max: 1,
         );
         widget.onBrightnessChanged(v);
@@ -149,7 +146,8 @@ class _PlayerGestureLayerState extends State<PlayerGestureLayer> {
           icon: Icons.brightness_6_rounded,
           title: '画面亮度',
           value: brightnessLabel(v),
-          ratio: (v - _minBrightness) / (1 - _minBrightness),
+          ratio: (v - widget.config.minBrightness) /
+              (1 - widget.config.minBrightness),
         );
       case PlayerGestureMode.seek:
         final duration = widget.readDuration();
@@ -161,6 +159,7 @@ class _PlayerGestureLayerState extends State<PlayerGestureLayer> {
           duration: duration,
           dx: _accumDx,
           width: size.width,
+          secondsPerScreen: widget.config.seekSecondsPerScreen,
         );
         _showHud(
           icon: Icons.fast_forward_rounded,
@@ -188,6 +187,7 @@ class _PlayerGestureLayerState extends State<PlayerGestureLayer> {
         duration: widget.readDuration(),
         dx: _accumDx,
         width: size.width,
+        secondsPerScreen: widget.config.seekSecondsPerScreen,
       );
       // 时长未知时 target == live，不做无意义的 seek
       if (target != live) seekTo = target;

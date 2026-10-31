@@ -7,6 +7,7 @@ import 'pages/search_page.dart';
 import 'services/history_store.dart';
 import 'services/offline_cache.dart';
 import 'services/playback_store.dart';
+import 'services/quality_store.dart';
 import 'services/show_service.dart';
 import 'services/source_store.dart';
 import 'services/subtitle_store.dart';
@@ -21,6 +22,7 @@ void main() {
   playbackStore.load();
   offlineCache.load();
   subtitleStore.load();
+  qualityStore.load();
   runApp(const HotShowApp());
 }
 

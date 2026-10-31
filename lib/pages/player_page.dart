@@ -9,8 +9,11 @@ import 'package:media_kit_video/media_kit_video.dart';
 import '../models/media_resource.dart';
 import '../models/subtitle.dart';
 import '../services/offline_cache.dart';
+import '../services/brightness_strategy.dart';
 import '../services/playback_store.dart';
+import '../services/player_gestures.dart' show GestureConfig;
 import '../services/quality_service.dart';
+import '../services/quality_store.dart';
 import '../services/remote_ua.dart';
 import '../services/subtitle_message.dart';
 import '../services/subtitle_service.dart';
@@ -79,8 +82,8 @@ class _PlayerPageState extends State<PlayerPage> {
   /// 音量 0..100（media_kit 的取值域），初值取播放器实际音量
   final ValueNotifier<double> _volume = ValueNotifier<double>(100);
 
-  /// 亮度 0.05..1.0（1.0 = 不遮罩）。用画面遮罩实现，三端表现一致
-  final ValueNotifier<double> _brightness = ValueNotifier<double>(1);
+  /// 亮度策略：现在是「画面遮罩」实现，换系统亮度只需换一个实现类
+  final BrightnessStrategy _brightness = OverlayBrightnessStrategy();
 
   /// m3u8 master 里探测到的码率变体（单码率或探测失败时为空）
   List<QualityOption> _variants = const [];
@@ -88,6 +91,15 @@ class _PlayerPageState extends State<PlayerPage> {
 
   /// 用户手选的变体地址；null = 用线路原始地址（「自动」交给播放器自适应）
   String? _variantUrl;
+
+  /// 本次实际在播的变体地址（可能是记忆应用来的）；null = 线路原始地址
+  String? _activeVariantUrl;
+
+  /// 等首帧的兜底计时器（dispose 要能取消）
+  Timer? _probeTimer;
+
+  /// 播放器参数只设一次；`_openCurrent` 先 await 它，避免 open 抢在设参之前
+  late final Future<void> _tuneFuture;
 
   // 整条线路批量缓存
   int _batchDone = 0;
@@ -116,6 +128,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _applyResumeRecord();
     _subtitle = subtitleStore.selectedFor(_r.key);
     _volume.value = _player.state.volume.clamp(0.0, 100.0);
+    _tuneFuture = _tunePlayer();
 
     _completedSub = _player.stream.completed.listen(_onCompleted);
     _errorSub = _player.stream.error.listen((e) {
@@ -140,6 +153,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _errorSub.cancel();
     _cache.removeListener(_onCacheTick);
     subtitleStore.removeListener(_onSubtitleStoreChanged);
+    _probeTimer?.cancel();
     _volume.dispose();
     _brightness.dispose();
     _saveProgress();
@@ -218,7 +232,7 @@ class _PlayerPageState extends State<PlayerPage> {
   String _cacheKeyFor(int group, int episode) =>
       cacheKeyOf(_r.siteId, _r.vodId, group, episode);
 
-  Future<void> _openCurrent({Duration? seekTo}) async {
+  Future<void> _openCurrent({Duration? seekTo, bool allowVariantFallback = true}) async {
     final ep = _episode;
     if (ep == null) {
       ++_openEpoch; // 作废可能还在跑的旧流程
@@ -228,19 +242,24 @@ class _PlayerPageState extends State<PlayerPage> {
       });
       return;
     }
+    // 参数必须在 open 之前生效，否则这集的提速设置会漏掉
+    await _tuneFuture;
+    await qualityStore.load();
     final epoch = ++_openEpoch;
     final cached = _cache.byKey(_cacheKeyFor(_groupIndex, _episodeIndex));
-    // 手选了具体清晰度就走网络：本地缓存是整集固定码率，不能拿来顶替
-    final useLocal = _variantUrl == null &&
+    final variant = _variantUrl ?? _rememberedVariantFor(ep.url);
+    // 手选/记忆了具体清晰度就走网络：本地缓存是整集固定码率，不能拿来顶替
+    final useLocal = variant == null &&
         cached != null &&
         File(cached.localFile).existsSync();
-    final playUrl = _variantUrl ?? ep.url;
+    final playUrl = variant ?? ep.url;
     final uri = useLocal ? Uri.file(cached.localFile).toString() : playUrl;
 
     setState(() {
       _opening = true;
       _error = null;
       _isLocal = useLocal;
+      _activeVariantUrl = useLocal ? null : variant;
     });
     try {
       await _player.open(
@@ -254,13 +273,23 @@ class _PlayerPageState extends State<PlayerPage> {
       if (target != null && target > const Duration(seconds: 3)) {
         await _player.seek(target);
       }
-      await _player.setRate(_rate);
+      // 1.0 是默认值，省掉一次命令往返（对起播速度有一点点影响）
+      if (_rate != 1.0) await _player.setRate(_rate);
       // 换集/换线路后 libmpv 会清空外部字幕，需重新挂载
       await _applySubtitle();
-      // 清晰度探测放到后台，探测失败也不影响播放
-      if (!useLocal) unawaited(_probeQualities(ep.url));
+      // 清晰度探测等首帧出来再做：起播阶段抢带宽会明显变慢
+      if (!useLocal) unawaited(_probeAfterFirstFrame(ep.url, epoch));
     } catch (e) {
-      if (mounted && epoch == _openEpoch) setState(() => _error = '$e');
+      if (!mounted || epoch != _openEpoch) return;
+      // 记忆/手选的变体地址可能已经失效（片源带签名，隔天就变）：
+      // 清掉这条记忆，退回线路默认地址再试一次，别让人卡在「播放失败」
+      if (allowVariantFallback && _activeVariantUrl != null) {
+        await qualityStore.forgetVariant(ep.url);
+        _variantUrl = null;
+        _activeVariantUrl = null;
+        return _openCurrent(seekTo: seekTo, allowVariantFallback: false);
+      }
+      setState(() => _error = '$e');
     } finally {
       if (mounted && epoch == _openEpoch) {
         setState(() => _opening = false);
@@ -553,8 +582,9 @@ class _PlayerPageState extends State<PlayerPage> {
     } else {
       setState(() => _episodeIndex = index);
     }
-    // 换集/换线路后回到该线路的默认清晰度
+    // 换集/换线路后回到该线路的默认清晰度（记忆命中时 _openCurrent 会重新填）
     _variantUrl = null;
+    _activeVariantUrl = null;
     _variants = const [];
     await _openCurrent(seekTo: seekTo);
   }
@@ -586,13 +616,62 @@ class _PlayerPageState extends State<PlayerPage> {
 
   // ------------------------------------------------------- 手势与清晰度
 
+  /// 起播提速：只动「起播时机」相关的三个参数。
+  ///
+  /// - `cache-secs` / `demuxer-readahead-secs`：默认 10 秒，降到 6 秒——
+  ///   不用先攒够 10 秒数据才出画；
+  /// - `network-timeout`：默认 60 秒，降到 10 秒——死链不用干等一分钟。
+  ///
+  /// 刻意**不降** `demuxer-max-bytes`（默认 150MiB+）：那会让拖动和片尾重新缓冲变慢，
+  /// 是拿后面的卡顿换前面的一点启动时间，不划算；
+  /// 也刻意**不碰** `hls-bitrate`：清晰度仍由播放器按带宽自适应，不降档。
+  Future<void> _tunePlayer() async {
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return;
+    const options = {
+      'cache-secs': '6',
+      'demuxer-readahead-secs': '6',
+      'network-timeout': '10',
+    };
+    for (final e in options.entries) {
+      try {
+        await platform.command(['set', e.key, e.value]);
+      } catch (_) {
+        // 不同平台的 mpv 版本不一定认全部属性，认不出的跳过
+      }
+    }
+  }
+
   void _applyVolume(double v) {
     if (!mounted) return;
     _volume.value = v;
     _player.setVolume(v);
   }
 
-  void _applyBrightness(double v) => _brightness.value = v;
+  void _applyBrightness(double v) => _brightness.set(v);
+
+  /// 等首帧出来再探测：起播阶段每多一条请求都在抢带宽。
+  /// 最多等 3 秒（起播失败时也要把清晰度菜单探出来）。
+  Future<void> _probeAfterFirstFrame(String url, int epoch) async {
+    final done = Completer<void>();
+    final sub = _player.stream.position.listen((p) {
+      if (p > Duration.zero && !done.isCompleted) done.complete();
+    });
+    _probeTimer?.cancel();
+    _probeTimer = Timer(const Duration(seconds: 3), () {
+      if (!done.isCompleted) done.complete();
+    });
+    try {
+      await done.future;
+    } finally {
+      await sub.cancel();
+      _probeTimer?.cancel();
+    }
+    if (!mounted || epoch != _openEpoch) return;
+    await _probeQualities(url);
+    if (!mounted || epoch != _openEpoch) return;
+    _prefetchNextProbe();
+  }
 
   /// 读一次 m3u8，把 master playlist 里的码率变体列出来。
   /// 失败/单码率都只是「没有更多清晰度可选」，不影响播放。
@@ -601,6 +680,34 @@ class _PlayerPageState extends State<PlayerPage> {
     final found = await qualityService.probe(url, headers: _headersFor(url));
     if (!mounted || epoch != _qualityEpoch) return;
     setState(() => _variants = found);
+  }
+
+  /// 起播时能零成本拿到的「记忆清晰度」地址：
+  /// - 同一集重看 → 上次存下来的变体地址直接可用；
+  /// - 换集但码率表已被上一集预热进缓存 → 按记忆的标签解析出这一集的同档位。
+  /// 都不命中就返回 null，按线路默认地址起播——**绝不为了偏好加一次联网**，
+  /// 那等于把起播拖慢，和「记住清晰度」的初衷相反。
+  String? _rememberedVariantFor(String masterUrl) {
+    final saved = qualityStore.variantFor(masterUrl);
+    if (saved != null) return saved;
+    final cached = qualityService.cachedOptions(
+      masterUrl,
+      headers: _headersFor(masterUrl),
+    );
+    if (cached == null) return null;
+    final resolved = resolveRemembered(qualityStore.labelFor(_r.key), cached);
+    if (resolved == null || resolved.isAuto) return null;
+    return resolved.url;
+  }
+
+  /// 预热下一集的清晰度表：切集时菜单秒开，记忆的清晰度也能立刻生效
+  void _prefetchNextProbe() {
+    final g = _group;
+    if (g == null) return;
+    final next = _episodeIndex + 1;
+    if (next >= g.episodes.length) return;
+    final url = g.episodes[next].url;
+    unawaited(qualityService.probe(url, headers: _headersFor(url)));
   }
 
   /// 可切换的清晰度：m3u8 变体优先，其次是「线路名里带清晰度字样」的其它线路
@@ -612,7 +719,8 @@ class _PlayerPageState extends State<PlayerPage> {
 
   /// 当前选中项 id：'auto' / 变体地址 / 'g:线路下标'
   String get _currentQualityId {
-    if (_variantUrl != null) return _variantUrl!;
+    final active = _variantUrl ?? _activeVariantUrl;
+    if (active != null) return active;
     if (_variants.isNotEmpty) return 'auto';
     if (qualityRankOfName(_group?.name ?? '') > 0) return 'g:$_groupIndex';
     return '';
@@ -640,6 +748,13 @@ class _PlayerPageState extends State<PlayerPage> {
     final pos = _player.state.position;
     setState(() => _variantUrl = option.isAuto ? null : option.url);
     await _openCurrent(seekTo: pos);
+    // 记住这部剧的选择：标签用来在别的集上找回同档，变体地址只对同一集有效
+    unawaited(qualityStore.remember(
+      _r.key,
+      option.isAuto ? 'auto' : option.label,
+      masterUrl: _episode?.url ?? '',
+      variantUrl: option.isAuto ? null : option.url,
+    ));
     _toast(option.isAuto ? '清晰度：自动适应' : '已切换到 ${option.label}');
   }
 
@@ -650,6 +765,7 @@ class _PlayerPageState extends State<PlayerPage> {
       return;
     }
     final current = _currentQualityId;
+    final remembered = qualityStore.labelFor(_r.key);
     final picked = await showModalBottomSheet<QualityOption>(
       context: context,
       showDragHandle: true,
@@ -684,7 +800,21 @@ class _PlayerPageState extends State<PlayerPage> {
                         : Icons.radio_button_unchecked_rounded,
                     color: o.id == current ? scheme.primary : null,
                   ),
-                  title: Text(o.label, style: const TextStyle(fontSize: 14)),
+                  title: Row(
+                    children: [
+                      Text(o.label, style: const TextStyle(fontSize: 14)),
+                      if (o.label == remembered && !o.isGroup) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          '上次选的',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                   subtitle: o.detail.isEmpty
                       ? null
                       : Text(o.detail, style: const TextStyle(fontSize: 11)),
@@ -712,7 +842,7 @@ class _PlayerPageState extends State<PlayerPage> {
     }
     _toast('开始缓存「${ep.name}」');
     // 缓存用户当前正在看的那个清晰度，而不是线路默认地址
-    final url = _variantUrl ?? ep.url;
+    final url = _activeVariantUrl ?? ep.url;
     try {
       await _cache.download(
         key: key,
@@ -979,23 +1109,12 @@ class _PlayerPageState extends State<PlayerPage> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        ValueListenableBuilder<double>(
-          valueListenable: _brightness,
-          builder: (_, brightness, _) {
-            final dim = (1 - brightness) * 0.85;
-            if (dim <= 0.001) return const SizedBox.shrink();
-            // 遮罩是整块视频面积的 alpha 混合，单独包一层避免连带重绘视频
-            return RepaintBoundary(
-              child: IgnorePointer(
-                child: ColoredBox(color: Colors.black.withValues(alpha: dim)),
-              ),
-            );
-          },
-        ),
+        // 亮度层：由策略实现（现在是画面遮罩；换系统亮度只需换实现）
+        _brightness.buildOverlay(context),
         AdaptiveVideoControls(state),
         PlayerGestureLayer(
           volume: _volume,
-          brightness: _brightness,
+          brightness: _brightness.listenable,
           readPosition: () => _player.state.position,
           readDuration: () => _player.state.duration,
           onVolumeChanged: _applyVolume,
@@ -1004,6 +1123,7 @@ class _PlayerPageState extends State<PlayerPage> {
             // 手势松手可能正好撞上页面关闭（player 已 dispose），先挡一道
             if (mounted) _player.seek(t);
           },
+          config: _isDesktop ? GestureConfig.comfortable : const GestureConfig(),
           enabled: !_opening,
         ),
       ],
