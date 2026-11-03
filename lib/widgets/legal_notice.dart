@@ -168,68 +168,65 @@ class _LegalNoticeDialogState extends State<_LegalNoticeDialog> {
                         TextSpan(
                           style: DefaultTextStyle.of(context).style,
                           children: [
-                            const TextSpan(text: '「${LegalNotice.appName}」是 '),
+                            const TextSpan(text: '嗨，先占用你十秒。\n\n「${LegalNotice.appName}」是 '),
                             TextSpan(
                               text: LegalNotice.owner,
                               style: const TextStyle(fontWeight: FontWeight.bold),
                             ),
+                            const TextSpan(text: ' 自己写着玩的'),
                             const TextSpan(
-                              text: ' 的',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            const TextSpan(
-                              text: '个人自用软件',
+                              text: '个人软件',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Color(0xFFE5455C),
                               ),
                             ),
                             const TextSpan(
-                              text: '，不是商业产品，也未在任何应用商店上架销售。',
+                              text: '——没有广告、没有会员、没有内购，也不在任何应用商店卖。'
+                                  '下面几句不是免责套话，只是希望你知道自己在用什么。',
                             ),
                           ],
                         ),
                       ),
                       const SizedBox(height: 12),
                       const _Point(
-                        '禁止商业使用',
-                        '不得用于售卖、出租、捆绑销售、代运营、广告变现，或任何以营利为目的的经营场景；'
-                            '未经作者书面许可，不得对外提供本软件或其修改版。',
+                        '别拿去卖',
+                        '自己看、给朋友装都随意。但别拿它收款、代运营、塞广告或者打包进别的产品里，'
+                            '也别未经同意就对外发布你改过的版本。',
                       ),
                       const _Point(
-                        '不得移除声明',
-                        '原样转发或备份时必须保留本声明、作者署名与 LICENSE；'
-                            '修改后的版本不得公开分发。',
+                        '别抹掉署名',
+                        '想原样转发或备份，把这份声明和 LICENSE 一起带上就好；'
+                            '改过之后的版本就别往外发了，改坏了容易被算到我头上。',
                       ),
                       const _Point(
-                        '内容来源',
-                        '本软件只聚合检索第三方公开链接并跳转播放，不托管、不制作、不销售任何视频文件；'
-                            '影视元数据来自豆瓣公开接口（以其官方条款为准），版权归原权利人所有。',
+                        '片子不是我存的',
+                        '我只负责帮你搜到公开链接、把请求转发给播放器，不存视频、不做转码、也不卖内容。'
+                            '海报和简介来自豆瓣，版权都归原作者。',
                       ),
                       const _Point(
-                        '离线缓存',
-                        '是否把分片暂存到本机由你自行决定并自负其责；'
-                            '请勿下载、录制或传播受版权保护的内容。',
+                        '缓存自己拿主意',
+                        '要不要把分片存到手机上，这个决定权在你（也由你负责）。'
+                            '存下来的东西自己看就好，别再传给别人。',
                       ),
                       const _Point(
-                        '合规与免责',
-                        '请遵守所在地法律法规，仅将本软件用于个人学习与研究；'
-                            '因使用或传播产生的后果由使用者自行承担。',
+                        '按当地规矩来',
+                        '希望你只在合法、合理的前提下用它。出了什么事，我没法替你兜底。',
                       ),
                       const _Point(
-                        '联系与侵权处理',
-                        '问题反馈、建议、侵权处理都走 GitHub 仓库：'
+                        '有事找我',
+                        '用着出问题、发现 bug、或者觉得哪段内容侵了权，来 GitHub 提个 issue：'
                             '${LegalNotice.repoUrl}'
-                            '（可直接提 issue），收悉后及时处理。',
+                            '。看到会尽快处理。',
                       ),
                       const _Point(
-                        '支持作者',
-                        '如果这个软件对你有用，欢迎到上面的 GitHub 仓库点一个 Star——'
-                            '这是对个人开发者最直接的支持，也不花钱。',
+                        '要是觉得好用',
+                        '去仓库点个 ⭐ Star 就够意思了——不花钱，但我能知道确实有人在用。'
+                            '这大概是我继续更新的主要动力。',
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        '本声明是使用提示与许可摘要，具体条款以项目 LICENSE 为准；继续使用即表示你已知悉。',
+                        '以上只是把话说在前头，具体条款以项目 LICENSE 为准。点下面的按钮就当你看过了。',
                         style:
                             TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
                       ),
@@ -241,7 +238,7 @@ class _LegalNoticeDialogState extends State<_LegalNoticeDialog> {
                           onPressed: () => _openRepo(context),
                           icon: const Icon(Icons.star_rounded, size: 18),
                           label: const Text(
-                            '去 GitHub 点个 Star',
+                            '去仓库点个 Star',
                             style: TextStyle(fontSize: 12),
                           ),
                           style: OutlinedButton.styleFrom(

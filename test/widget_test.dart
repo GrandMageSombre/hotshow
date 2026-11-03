@@ -117,16 +117,17 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('使用声明'), findsOneWidget);
-    expect(find.textContaining('个人自用'), findsWidgets);
-    expect(find.textContaining('禁止商业使用'), findsOneWidget);
+    expect(find.textContaining('个人软件'), findsWidgets);
+    // 措辞改口语，但「不能拿去卖」这条约束必须还在
+    expect(find.textContaining('别拿去卖'), findsOneWidget);
     expect(find.textContaining('umena'), findsWidgets);
     // 联系方式必须是仓库直链，并给出「点 Star」的引导
     expect(
       find.textContaining('github.com/GrandMageSombre/hotshow'),
       findsWidgets,
     );
-    expect(find.textContaining('点一个 Star'), findsWidgets);
-    expect(find.text('去 GitHub 点个 Star'), findsOneWidget);
+    expect(find.textContaining('Star'), findsWidgets);
+    expect(find.text('去仓库点个 Star'), findsOneWidget);
     // 底部新增的开关
     expect(find.text('每次打开时显示此声明'), findsOneWidget);
 

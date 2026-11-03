@@ -427,10 +427,10 @@ class _NeedSites extends StatelessWidget {
             Icon(Icons.dns_rounded,
                 size: 46, color: Theme.of(context).colorScheme.outline),
             const SizedBox(height: 14),
-            const Text('还没有配置采集站', style: TextStyle(fontSize: 16)),
+            const Text('还差一步：先给它找个片源', style: TextStyle(fontSize: 16)),
             const SizedBox(height: 8),
             Text(
-              '本应用不内置任何影视站点。可以让它自动搜索一批候选接口，\n或手动填一个 maccms 采集接口地址。',
+              '这个 App 本身不带片源。\n可以让它自动搜一批候选接口，\n也可以自己填一个 maccms 采集接口地址。',
               textAlign: TextAlign.center,
               style: TextStyle(
                   fontSize: 12,

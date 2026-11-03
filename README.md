@@ -530,7 +530,12 @@ flutter build apk --release
 
 ## 支持作者
 
-如果这个软件对你有用，欢迎到 **[github.com/GrandMageSombre/hotshow](https://github.com/GrandMageSombre/hotshow)**
-点一个 ⭐ Star。不花钱，但能让作者知道这东西有人在用，也更愿意继续维护。
+这个软件是我下班后一个人写的，没有广告、没有会员、没有内购，也不打算靠它赚钱。
 
-问题反馈、功能建议、侵权处理同样走这个仓库的 issue。
+如果它帮你省下了找片源的半个小时，那就算没白做。想表示感谢的话，去
+**[github.com/GrandMageSombre/hotshow](https://github.com/GrandMageSombre/hotshow)** 点个 ⭐ Star
+就行——不花钱，但我能看到还有人真的在用，写下去的动力大概就来自这个数字。
+
+用着有问题、想要什么功能、或者觉得某个地方不该这么设计，都欢迎来仓库提 issue。
+我可能回得慢，但基本都会看、会回。
+
