@@ -10,6 +10,8 @@ import '../services/show_service.dart';
 import '../widgets/common_views.dart';
 import '../widgets/genre_bar.dart';
 import '../widgets/paged_show_grid.dart';
+import 'hongguo_page.dart';
+import 'web_grab_page.dart';
 
 class SearchPage extends StatefulWidget {
   final String? initialQuery;
@@ -230,16 +232,80 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
+  /// 搜索历史页顶部的两个快捷入口（红果短剧 / 网址抓取）
+  Widget _entryCard({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 20, color: scheme.primary),
+              const SizedBox(height: 6),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildSearchHistory() {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        Row(
+          children: [
+            Expanded(
+              child: _entryCard(
+                icon: Icons.theaters_rounded,
+                title: '红果短剧',
+                subtitle: '真人剧 / 漫剧 / AI 剧，免费直连',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const HongguoPage()),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _entryCard(
+                icon: Icons.travel_explore_rounded,
+                title: '网址抓取',
+                subtitle: '粘贴网址，自动找出视频',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const WebGrabPage()),
+                ),
+              ),
+            ),
+          ],
+        ),
         if (historyStore.searchHistory.isEmpty)
           const Padding(
             padding: EdgeInsets.only(top: 40),
             child: EmptyHint(message: '输入片名开始搜索，例如「庆余年」「芙莉莲」'),
           )
         else ...[
+          const SizedBox(height: 16),
           Row(
             children: [
               const Icon(Icons.history_rounded, size: 18),

@@ -10,6 +10,7 @@ import '../widgets/facet_menu.dart';
 import '../widgets/legal_notice.dart';
 import '../widgets/genre_bar.dart';
 import '../widgets/paged_show_grid.dart';
+import 'hongguo_page.dart';
 
 class HomePage extends StatefulWidget {
   final ShowService? service;
@@ -48,6 +49,14 @@ class _HomePageState extends State<HomePage>
             tooltip: '使用声明',
             onPressed: () => LegalNotice.show(context),
             icon: const Icon(Icons.info_outline_rounded),
+          ),
+          IconButton(
+            tooltip: '红果短剧',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const HongguoPage()),
+            ),
+            icon: const Icon(Icons.theaters_rounded),
           ),
           IconButton(
             tooltip: '刷新榜单',

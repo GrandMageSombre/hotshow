@@ -11,6 +11,7 @@ import '../models/subtitle.dart';
 import '../services/offline_cache.dart';
 import '../services/bitrate_probe.dart';
 import '../services/brightness_strategy.dart';
+import '../services/page_scraper.dart' show kGrabSiteId;
 import '../services/playback_store.dart';
 import '../services/player_gestures.dart' show GestureConfig;
 import '../services/quality_service.dart';
@@ -128,6 +129,11 @@ class _PlayerPageState extends State<PlayerPage> {
 
   /// 换过的片源栈，支持一键切回
   final List<MediaResource> _history = [];
+
+  /// 红果短剧 / 网页抓取这类「用户拿到的单条源」：采集站列表里搜不到，
+  /// 换源之后无法再搜回来，菜单里要给出显式的切回入口。
+  bool get _isAdhocSource =>
+      _r.siteId == 'hongguo' || _r.siteId == kGrabSiteId;
 
   MediaResource get _r => _resource;
 
@@ -893,7 +899,22 @@ class _PlayerPageState extends State<PlayerPage> {
                   onTap: () => Navigator.pop(ctx, o),
                 ),
               Divider(height: 8, color: scheme.outlineVariant),
-              if (_history.isNotEmpty)
+              // 红果 / 网址抓取是「用户指定的那一条源」，不在换源搜索范围内，
+              // 切过去就回不来了，所以这里单独留一个切回本源的入口。
+              if (_isAdhocSource && _history.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.reply_rounded),
+                  title: Text(
+                    '切回「${_history.last.siteName}」',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                  subtitle: const Text(
+                    '红果短剧 / 网页抓取是单独片源，不在「换片源」的搜索范围内',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                  onTap: () => Navigator.pop(ctx, 'back'),
+                )
+              else if (_history.isNotEmpty)
                 ListTile(
                   leading: const Icon(Icons.undo_rounded),
                   title: Text(
