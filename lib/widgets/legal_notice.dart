@@ -168,83 +168,48 @@ class _LegalNoticeDialogState extends State<_LegalNoticeDialog> {
                         TextSpan(
                           style: DefaultTextStyle.of(context).style,
                           children: [
-                            const TextSpan(text: '嗨，先占用你十秒。\n\n「${LegalNotice.appName}」是 '),
+                            const TextSpan(text: '「${LegalNotice.appName}」是 '),
                             TextSpan(
                               text: LegalNotice.owner,
                               style: const TextStyle(fontWeight: FontWeight.bold),
                             ),
-                            const TextSpan(text: ' 自己写着玩的'),
+                            const TextSpan(text: ' 的'),
                             const TextSpan(
-                              text: '个人软件',
+                              text: '个人自用软件',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: Color(0xFFE5455C),
                               ),
                             ),
+                            const TextSpan(text: '，'),
                             const TextSpan(
-                              text: '——没有广告、没有会员、没有内购，也不在任何应用商店卖。'
-                                  '下面几句不是免责套话，只是希望你知道自己在用什么。',
+                              text: '禁止商用',
+                              style: TextStyle(fontWeight: FontWeight.bold),
                             ),
+                            const TextSpan(text: '。'),
                           ],
                         ),
                       ),
                       const SizedBox(height: 12),
-                      const _Point(
-                        '别拿去卖',
-                        '自己看、给朋友装都随意。但别拿它收款、代运营、塞广告或者打包进别的产品里，'
-                            '也别未经同意就对外发布你改过的版本。',
-                      ),
-                      const _Point(
-                        '别抹掉署名',
-                        '想原样转发或备份，把这份声明和 LICENSE 一起带上就好；'
-                            '改过之后的版本就别往外发了，改坏了容易被算到我头上。',
-                      ),
-                      const _Point(
-                        '片子不是我存的',
-                        '我只负责帮你搜到公开链接、把请求转发给播放器，不存视频、不做转码、也不卖内容。'
-                            '海报和简介来自豆瓣，版权都归原作者。',
-                      ),
-                      const _Point(
-                        '缓存自己拿主意',
-                        '要不要把分片存到手机上，这个决定权在你（也由你负责）。'
-                            '存下来的东西自己看就好，别再传给别人。',
-                      ),
-                      const _Point(
-                        '按当地规矩来',
-                        '希望你只在合法、合理的前提下用它。出了什么事，我没法替你兜底。',
-                      ),
-                      const _Point(
-                        '有事找我',
-                        '用着出问题、发现 bug、或者觉得哪段内容侵了权，来 GitHub 提个 issue：'
-                            '${LegalNotice.repoUrl}'
-                            '。看到会尽快处理。',
-                      ),
-                      const _Point(
-                        '要是觉得好用',
-                        '去仓库点个 ⭐ Star 就够意思了——不花钱，但我能知道确实有人在用。'
-                            '这大概是我继续更新的主要动力。',
-                      ),
-                      const SizedBox(height: 10),
                       Text(
-                        '以上只是把话说在前头，具体条款以项目 LICENSE 为准。点下面的按钮就当你看过了。',
-                        style:
-                            TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                        '有事联系作者：',
+                        style: DefaultTextStyle.of(context).style
+                            .copyWith(fontSize: 13),
                       ),
-                      const SizedBox(height: 6),
-                      // 直接给一个能点的入口：让人想支持时不用自己去搜仓库
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: OutlinedButton.icon(
-                          onPressed: () => _openRepo(context),
-                          icon: const Icon(Icons.star_rounded, size: 18),
-                          label: const Text(
-                            '去仓库点个 Star',
-                            style: TextStyle(fontSize: 12),
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
+                      const SizedBox(height: 4),
+                      // 直接给可点的仓库地址，不用自己去搜
+                      InkWell(
+                        onTap: () => _openRepo(context),
+                        borderRadius: BorderRadius.circular(6),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Text(
+                            LegalNotice.repoUrl,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: scheme.primary,
+                              decoration: TextDecoration.underline,
+                            ),
                           ),
                         ),
                       ),
@@ -268,7 +233,7 @@ class _LegalNoticeDialogState extends State<_LegalNoticeDialog> {
                   style: TextStyle(fontSize: 13),
                 ),
                 subtitle: const Text(
-                  '取消勾选后不再自动弹出，仍可点首页右上角「i」查看并重新开启',
+                  '取消后不再弹，仍可从首页右上角「i」查看',
                   style: TextStyle(fontSize: 11),
                 ),
               ),
@@ -281,47 +246,6 @@ class _LegalNoticeDialogState extends State<_LegalNoticeDialog> {
             child: const Text('我已知悉'),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _Point extends StatelessWidget {
-  final String title;
-  final String body;
-  const _Point(this.title, this.body);
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return MergeSemantics(
-      child: Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 2, right: 6),
-            child: ExcludeSemantics(
-              child: Icon(Icons.circle, size: 6, color: scheme.primary),
-            ),
-          ),
-          Expanded(
-            child: Text.rich(
-              TextSpan(
-                style: DefaultTextStyle.of(context).style.copyWith(fontSize: 13),
-                children: [
-                  TextSpan(
-                    text: '$title：',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  TextSpan(text: body),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
       ),
     );
   }
