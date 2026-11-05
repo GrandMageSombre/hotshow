@@ -41,6 +41,9 @@ class PlayerPage extends StatefulWidget {
   final int? initialEpisode;
   final Duration? startAt;
 
+  /// 电视直播：没有时长概念，也不该写进播放历史
+  final bool isLive;
+
   const PlayerPage({
     super.key,
     required this.resource,
@@ -49,6 +52,7 @@ class PlayerPage extends StatefulWidget {
     this.initialGroup,
     this.initialEpisode,
     this.startAt,
+    this.isLive = false,
   });
 
   @override
@@ -653,6 +657,8 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   Future<void> _saveProgress() async {
+    // 直播流没有「进度」可言：写进历史只会在历史页堆一堆 0 秒记录
+    if (widget.isLive) return;
     final ep = _episode;
     if (ep == null) return;
     final pos = _player.state.position;

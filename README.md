@@ -48,6 +48,7 @@
 | ℹ️ 详情页 | 海报、评分、类型/地区/首播/集数、导演/主演、剧情简介、豆瓣热门短评，一键跳转豆瓣网页 |
 | ▶️ 在线播放 | 详情页一键到已配置的采集站检索「完整资源」（多线路 / 全集），内置 media_kit（libmpv）播放器：选集、切线路、倍速、全屏、自动连播 |
 | ⬇️ 离线缓存 | 单集或整条线路的 m3u8 分片抓到本地并重写为本地播放列表，断网可看；播放进度本地记忆，下次进入自动续播 |
+| 📡 电视直播 | 独立「直播」页，内置 6 个 GitHub 公开 IPTV m3u 源（合计约 2400 个频道，去重前 2700+），可切源、按分组筛（央视/卫视/地方/纪录…）、只看高清（4K 单独角标）、搜台名、记住上次用的源；组播地址自动置灰 |
 | 🗄️ 采集站管理 | 站点可增删改、启停、连通性自检；**工程不写死任何影视站点地址**，站点由自动搜索或手动填写得到 |
 | 🔎 自动搜索采集站 | **不用填任何地址**，点一下就自动拉取内置的公开清单源并解析出候选采集接口（也支持纯文本 / JSON 数组 / `{"sites":[…]}` / TVBox 风格配置，或手动粘贴），并发探测后标出可用/不可用/已添加，勾选即批量导入 |
 | 💬 在线字幕 | 播放页一键搜索 OpenSubtitles（免登录可搜，匿名有频率限制，可填免费 API Key），下载 zip 自动解包、GBK 自动转 UTF-8；支持粘贴字幕直链、管理本剧字幕、时间轴 ±0.5s 实时微调，换集自动重挂 |
@@ -152,6 +153,7 @@ lib/
 │   ├── genre.dart             # 片源类型（Genre）+ 四张类型表（电视剧/电影/短剧/动漫）
 │   ├── facet.dart             # 多维筛选（FilterSelection：类型/地区/年份 → tags）
 │   ├── subtitle.dart          # 字幕搜索结果 / 本地字幕记录模型
+│   ├── iptv_channel.dart      # 直播频道模型 + IPTV m3u 列表解析（纯 Dart）
 │   └── source_site.dart       # 采集站配置模型（纯 Dart，可 dart run 直用）
 ├── services/
 │   ├── api_client.dart        # HTTP 层：frodo 签名客户端 + rexxar 客户端 + 统一错误
@@ -170,6 +172,9 @@ lib/
 │   │   ├── subtitle_text.dart   # 编码识别（UTF-8/UTF-16/GBK）与时间轴偏移
 │   │   └── subtitle_exception.dart # 字幕异常与用户可读文案
 │   ├── m3u8.dart              # M3U8/HLS 播放列表解析与本地列表生成（纯 Dart）
+│   ├── iptv_service.dart      # 直播源：GitHub m3u 拉取（镜像降级）+ 合并去重 + 缓存
+│   ├── hongguo_service.dart   # 红果短剧网页版抓取（_ROUTER_DATA 解析 / 榜单卡片兜底）
+│   ├── page_scraper.dart      # 网址抓取：直链识别 / 爱看机器人专用解析 / 静态嗅探
 │   ├── offline_cache.dart     # 分片下载/离线缓存（并发、取消、断点目录管理）
 │   ├── playback_store.dart    # 播放进度（续播）持久化
 │   └── history_store.dart     # 搜索历史 + 浏览历史（本地持久化）
@@ -180,7 +185,10 @@ lib/
 │   ├── history_page.dart      # 历史记录页
 │   ├── detail_page.dart       # 详情页
 │   ├── resource_page.dart     # 资源检索页（多站点聚合结果）
-│   ├── player_page.dart       # 播放页（media_kit + 选集/倍速/缓存/字幕）
+│   ├── player_page.dart       # 播放页（media_kit + 选集/倍速/缓存/字幕，直播走 isLive）
+│   ├── live_page.dart         # 电视直播页（切源 / 分组 / 只看高清 / 搜台名）
+│   ├── hongguo_page.dart      # 红果短剧页（热播榜 + 真人剧/漫剧/AI 剧，可翻页）
+│   ├── web_grab_page.dart     # 网址抓取页（粘网址或分享文案，解析出可播地址）
 │   ├── subtitle_page.dart     # 在线字幕页（搜索 / 直链导入 / 本剧字幕管理）
 │   ├── site_settings_page.dart# 采集站管理页
 │   └── source_discovery_page.dart # 自动搜索采集站页
@@ -193,8 +201,12 @@ tool/api_check.dart            # 豆瓣数据层真实接口集成测试（dart 
 tool/source_check.dart         # 采集站接口连通性验证（dart run 直跑）
 tool/discover_check.dart       # 清单拉取 + 批量探测（dart run 直跑）
 tool/subtitle_check.dart       # 字幕搜索/下载/解包验证（dart run 直跑）
+tool/hongguo_check.dart        # 红果短剧榜单/详情/取流实测（dart run 直跑）
+tool/iptv_check.dart           # 直播源逐个实拉：频道数 / HD / 4K / 耗时（dart run 直跑）
 tool/image_probe.dart          # 豆瓣图床 WAF 探针：四种请求头组合实测（dart run 直跑）
 test/widget_test.dart          # UI 冒烟测试（注入假数据，不访问网络；含窄屏/大字号回归）
+test/iptv_playlist_test.dart   # IPTV m3u 解析：属性引号/逗号、分组、去重、协议判定
+test/hongguo_scraper_test.dart # 红果榜单卡片 / _ROUTER_DATA / 网页抓取解码单测
 test/resource_test.dart        # 采集站检索/解析/排序单测（本地假接口）
 test/discovery_test.dart       # 清单解析 + 并发探测单测（本地假清单/假站点）
 test/offline_test.dart         # m3u8 解析与分片缓存单测（本地假 HLS 服务）

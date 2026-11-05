@@ -10,7 +10,8 @@ import 'web_grab_page.dart';
 
 /// 红果短剧：官方网页版（hongguoduanju.com）的真人剧/漫剧/AI 剧列表 + 直接播放。
 ///
-/// 网页版只有 360p（720p/1080p 均 404），这一点在页面顶部直接写清楚，
+/// 网页版只对访客开放 360p；480p/720p 走加密 DASH，密钥只在官方 App 内，
+/// 详见 `docs/红果高清探测.md`。页面顶部把这件事写清楚，
 /// 免得用户以为是播放器没切清晰度。
 class HongguoPage extends StatefulWidget {
   const HongguoPage({super.key});
@@ -181,7 +182,7 @@ class _HongguoPageState extends State<HongguoPage> {
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
-                    '来自红果网页版，免费无广告；网页只提供 360p（App 内同为 360p）',
+                    '来自红果网页版，免费无广告；只给 360p，要 720p 得用官方 App',
                     style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
                   ),
                 ),

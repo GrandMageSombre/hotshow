@@ -11,8 +11,14 @@
 /// | `/category/xxx?page=2` | 同上，24 条/页 |
 /// | `/detail?series_id=…` | `loaderData["detail_$"]`，含 `vid_list`（全部剧集 id） |
 ///
-/// 播放地址是固定的 CDN 规则：`/video/public/{vid}/360p.mp4`
-/// （实测 720p/480p/1080p 均 404，网页版只给 360p，与 App 内一致）。
+/// 播放地址是固定的 CDN 规则：`/video/public/{vid}/360p.mp4`。
+///
+/// 网页版**只对访客开放 360p**（约 55 kbps，画面偏糊）。480p / 720p 确实存在，
+/// 走 `POST /api/video/protected/play-info` 能拿到 1.06 / 1.59 Mbps 的地址，
+/// 但那是 CENC-AES-CTR 加密的 DASH 分片（`encv` + `senc`，无 `pssh`），
+/// 内容密钥只在官方 App 内、网页端不下发 —— 试过 9 种候选 key 全部解不出
+/// H.264 起始码。绕过它属于规避技术措施，本项目不做。
+/// 完整探测记录见 `docs/红果高清探测.md`。
 /// 红果的一个短剧条目（列表页/首页卡片）
 
 library;
@@ -210,7 +216,7 @@ class HongguoService {
     );
   }
 
-  /// 红果的固定播放地址规则（网页版只提供 360p）。
+  /// 红果的固定播放地址规则（网页版只提供 360p，高码率档位是加密 DASH）。
   static String mp4UrlOf(String vid) => '$base/video/public/$vid/360p.mp4';
 
   /// 从任意红果网址里取出 `series_id`（详情页、播放页都行）

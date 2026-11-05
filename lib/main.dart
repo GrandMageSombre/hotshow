@@ -3,6 +3,7 @@ import 'package:media_kit/media_kit.dart';
 
 import 'pages/history_page.dart';
 import 'pages/home_page.dart';
+import 'pages/live_page.dart';
 import 'pages/search_page.dart';
 import 'services/history_store.dart';
 import 'services/offline_cache.dart';
@@ -84,6 +85,10 @@ class _HomeShell extends StatefulWidget {
 class _HomeShellState extends State<_HomeShell> {
   int _index = 0;
 
+  /// 直播页要联网拉频道表，没必要在冷启动时就下 500KB——
+  /// 首次切到这一页才真正构建它。
+  bool _liveVisited = false;
+
   @override
   void initState() {
     super.initState();
@@ -103,12 +108,16 @@ class _HomeShellState extends State<_HomeShell> {
         children: [
           HomePage(service: widget.service, autoRefresh: widget.autoRefresh),
           SearchPage(service: widget.service),
+          _liveVisited ? const LivePage() : const SizedBox.shrink(),
           HistoryPage(),
         ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) => setState(() {
+          _index = i;
+          if (i == 2) _liveVisited = true;
+        }),
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.local_fire_department_outlined),
@@ -118,6 +127,11 @@ class _HomeShellState extends State<_HomeShell> {
           NavigationDestination(
             icon: Icon(Icons.search_rounded),
             label: '搜索',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.live_tv_outlined),
+            selectedIcon: Icon(Icons.live_tv_rounded),
+            label: '直播',
           ),
           NavigationDestination(
             icon: Icon(Icons.history_rounded),
