@@ -98,6 +98,7 @@ class _LivePageState extends State<LivePage> {
       if (!mounted || myEpoch != _epoch) return;
       setState(() {
         _playlist = p;
+        _playlistVersion++;
         _loading = false;
         _visibleKey = '';
       });
@@ -110,6 +111,7 @@ class _LivePageState extends State<LivePage> {
         // 新源没拉到就退回去，别把用户正在看的列表清空
         _sourceId = prevSource;
         _playlist = prevPlaylist;
+        _playlistVersion++;
         _group = prevGroup;
       });
     }
@@ -118,12 +120,14 @@ class _LivePageState extends State<LivePage> {
   /// 当前生效的频道列表（分组 → 高清 → 搜索依次过滤）
   ///
   /// 结果是带签名的缓存：只有一个过滤条件变了才重算。
-  /// 合并模式有 2700 条，每敲一个字都全量重跑会明显卡输入。
+  /// 合并模式有 3200 条，每敲一个字都全量重跑会明显卡输入。
+  /// 签名用自增版本号而不是对象的 identityHashCode —— 后者理论上会撞。
+  int _playlistVersion = 0;
   String _visibleKey = '';
   List<IptvChannel> _visibleList = const [];
 
   List<IptvChannel> get _visible {
-    final key = '${identityHashCode(_playlist)}|$_group|$_hdOnly|$_keyword';
+    final key = '$_playlistVersion|$_group|$_hdOnly|$_keyword';
     if (key == _visibleKey) return _visibleList;
     _visibleKey = key;
     _visibleList = _computeVisible();
@@ -173,6 +177,8 @@ class _LivePageState extends State<LivePage> {
           resource: resource,
           resume: false,
           isLive: true,
+          // 部分源要求指定 UA/Referer，不带会被 CDN 判盗链
+          extraHeaders: c.playHeaders ?? const {},
         ),
       ),
     );
@@ -230,7 +236,8 @@ class _LivePageState extends State<LivePage> {
             id: kIptvAllSources,
             label: '全部合并',
             sub: '${kIptvSources.fold<int>(0, (a, s) => a + s.channels)} 条',
-            tip: '六份列表并起来、按台名去重。频道最多，但排序按源的可播率来',
+            tip: '${kIptvSources.length} 份列表并起来、按台名去重。'
+                '频道最多，但排序按源的可播率来',
           ),
           for (final s in kIptvSources)
             _sourceChip(
@@ -238,8 +245,10 @@ class _LivePageState extends State<LivePage> {
               id: s.id,
               label: s.name,
               // 「~」是刻意留的：这是抽样估出来的可播率，不是保证
-              sub: '${s.channels}台 · ~${s.health}%',
+              sub: s.statsText,
+              badge: s.badge,
               tip: '${s.note}\n可播率是抽样 40 个频道实测的估计值',
+              sports: s.category == IptvCategory.sports,
             ),
         ],
       ),
@@ -251,7 +260,9 @@ class _LivePageState extends State<LivePage> {
     required String id,
     required String label,
     required String sub,
+    String badge = '',
     String? tip,
+    bool sports = false,
   }) {
     final on = id == _sourceId;
     final body = Padding(
@@ -267,6 +278,14 @@ class _LivePageState extends State<LivePage> {
           ),
           child: Row(
             children: [
+              if (sports) ...[
+                Icon(
+                  Icons.sports_basketball_rounded,
+                  size: 12,
+                  color: on ? scheme.onPrimaryContainer : scheme.outline,
+                ),
+                const SizedBox(width: 4),
+              ],
               Text(
                 label,
                 style: TextStyle(
@@ -275,16 +294,38 @@ class _LivePageState extends State<LivePage> {
                   color: on ? scheme.onPrimaryContainer : scheme.onSurface,
                 ),
               ),
-              const SizedBox(width: 5),
-              Text(
-                sub,
-                style: TextStyle(
-                  fontSize: 10.5,
-                  color: on
-                      ? scheme.onPrimaryContainer.withValues(alpha: 0.75)
-                      : scheme.outline,
+              // 体育源最要紧的信息是「这儿有 NBA」，别藏在长按提示里
+              if (badge.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE5455C).withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: Text(
+                    badge,
+                    style: const TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFFE5455C),
+                    ),
+                  ),
                 ),
-              ),
+              ],
+              if (sub.isNotEmpty) ...[
+                const SizedBox(width: 5),
+                Text(
+                  sub,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    color: on
+                        ? scheme.onPrimaryContainer.withValues(alpha: 0.75)
+                        : scheme.outline,
+                  ),
+                ),
+              ],
             ],
           ),
         ),

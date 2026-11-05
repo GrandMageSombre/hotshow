@@ -223,6 +223,129 @@ http://a/hn.m3u8
     });
   });
 
+  group('播放要求（UA / Referer）', () {
+    test('#EXTINF 里的 http-user-agent 会被取出来', () {
+      // iptv-org 体育源里 54 条是这样：UA 值自带括号和逗号，
+      // 必须先找到引号外的逗号才能正确切出频道名
+      const s = '''
+#EXTM3U
+#EXTINF:-1 tvg-id="ArenaSport1.sk@SD" tvg-logo="http://a/x.png" http-user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.3" group-title="Sports",Arena Sport 1
+http://a/as1.m3u8
+''';
+      final p = parseIptvPlaylist(s);
+      expect(p.length, 1);
+      final c = p.channels.first;
+      expect(c.name, 'Arena Sport 1');
+      expect(c.group, 'Sports');
+      expect(c.userAgent, contains('Chrome/149'));
+      expect(c.playHeaders?['User-Agent'], contains('Chrome/149'));
+    });
+
+    test('http-referrer 也会被取出来', () {
+      const s = '''
+#EXTM3U
+#EXTINF:-1 http-referrer="https://live.example.com/" group-title="Sports",NBA TV
+http://a/nba.m3u8
+''';
+      final c = parseIptvPlaylist(s).channels.first;
+      expect(c.referrer, 'https://live.example.com/');
+      expect(c.playHeaders?['Referer'], 'https://live.example.com/');
+    });
+
+    test('#EXTVLCOPT 形式的 UA 也认', () {
+      const s = '''
+#EXTM3U
+#EXTINF:-1,CCTV5
+#EXTVLCOPT:http-user-agent=Mozilla/5.0 (Windows NT 10.0)
+http://a/c5.m3u8
+''';
+      final c = parseIptvPlaylist(s).channels.first;
+      expect(c.userAgent, contains('Mozilla/5.0'));
+    });
+
+    test('http-referer（单个 r）也要认', () {
+      const s = '''
+#EXTM3U
+#EXTINF:-1 http-referer="https://live.example.com/" group-title="Sports",NBA TV
+http://a/nba.m3u8
+''';
+      final c = parseIptvPlaylist(s).channels.first;
+      expect(c.referrer, 'https://live.example.com/');
+    });
+
+    test('withGroup 只换分组，其余字段原样保留', () {
+      const line = '#EXTINF:-1 tvg-id="x" tvg-logo="http://a/l.png" '
+          'http-user-agent="UA" http-referrer="http://r/" '
+          'group-title="Kids;Sports",NBA TV';
+      final c = parseIptvPlaylist('#EXTM3U\n$line\nhttp://a/nba.m3u8\n')
+          .channels
+          .first;
+      expect(c.userAgent, 'UA');
+      expect(c.referrer, 'http://r/');
+      final moved = c.withGroup('体育');
+      expect(moved.group, '体育');
+      expect(moved.name, c.name);
+      expect(moved.url, c.url);
+      expect(moved.logo, c.logo);
+      expect(moved.tvgId, c.tvgId);
+      expect(moved.userAgent, c.userAgent);
+      expect(moved.referrer, c.referrer);
+    });
+
+    test('没有播放要求时 playHeaders 为 null', () {
+      const s = '''
+#EXTM3U
+#EXTINF:-1,CCTV1
+http://a/1.m3u8
+''';
+      expect(parseIptvPlaylist(s).channels.first.playHeaders, null);
+    });
+
+    test('UA 不会串到下一条频道上', () {
+      const s = '''
+#EXTM3U
+#EXTINF:-1 http-user-agent="UA-A",台一
+http://a/1.m3u8
+#EXTINF:-1,台二
+http://a/2.m3u8
+''';
+      final p = parseIptvPlaylist(s);
+      expect(p.channels[0].userAgent, 'UA-A');
+      expect(p.channels[1].userAgent, '');
+    });
+  });
+
+  group('体育频道判定', () {
+    IptvChannel ch(String name, [String group = '']) =>
+        IptvChannel(name: name, url: 'http://a/1.m3u8', group: group);
+
+    test('分组是 Sports 就算体育', () {
+      expect(ch('ESPN', 'Sports').isSports, true);
+    });
+
+    test('中文体育台按名字识别', () {
+      expect(ch('CCTV5 体育赛事').isSports, true);
+      expect(ch('五星体育').isSports, true);
+      expect(ch('NBA TV').isSports, true);
+      expect(ch('睛彩篮球').isSports, true);
+    });
+
+    test('普通卫视不算体育', () {
+      expect(ch('湖南卫视', '卫视频道').isSports, false);
+      expect(ch('CCTV1', '央视频道').isSports, false);
+    });
+
+    test('体育彩票不算体育直播', () {
+      expect(ch('体育彩票开奖', '其他').isSports, false);
+    });
+
+    test('扩充后的关键词（英超/斯诺克/F1）也能认', () {
+      expect(ch('英超直播').isSports, true);
+      expect(ch('斯诺克台').isSports, true);
+      expect(ch('F1 赛车').isSports, true);
+    });
+  });
+
   group('内置源定义', () {
     test('每个源的 path 都形如 owner/repo/branch/file', () {
       for (final s in kIptvSources) {
@@ -246,6 +369,38 @@ http://a/hn.m3u8
     test('镜像列表最后一项是直连（兜底）', () {
       expect(kIptvMirrors.last,
           'https://raw.githubusercontent.com/');
+    });
+
+    test('体育源存在且可直接取（绝对地址不走镜像）', () {
+      final sports =
+          kIptvSources.where((s) => s.category == IptvCategory.sports);
+      expect(sports.isNotEmpty, true);
+      for (final s in sports) {
+        expect(s.isAbsolute, true, reason: '${s.id} 应指向 github.io 完整地址');
+        expect(s.path, startsWith('http'));
+      }
+    });
+
+    test('其它源都是 raw 相对路径（要走镜像降级）', () {
+      for (final s in kIptvSources) {
+        if (s.category == IptvCategory.sports) continue;
+        expect(s.isAbsolute, false, reason: s.id);
+      }
+    });
+
+    test('statsText 在没测过的源上不会显示成 0 台', () {
+      const unknown = IptvSourceDef(id: 'x', name: '自定义', path: 'a/b/c/d');
+      expect(unknown.statsText, '');
+      const measured = IptvSourceDef(
+          id: 'y', name: '内置', path: 'a/b/c/d', channels: 200, health: 80);
+      expect(measured.statsText, '200台 · ~80%');
+    });
+
+    test('体育源带 NBA 角标', () {
+      final sports =
+          kIptvSources.firstWhere((s) => s.category == IptvCategory.sports);
+      expect(sports.badge, 'NBA');
+      expect(sports.groupOverride, '体育');
     });
   });
 }

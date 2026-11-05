@@ -24,10 +24,12 @@ Future<void> main(List<String> args) async {
       final hd = p.channels.where((c) => c.isHd).length;
       final fourK = p.channels.where((c) => c.is4K).length;
       final dead = p.channels.where((c) => !c.playable).length;
+      final needUa = p.channels.where((c) => c.playHeaders != null).length;
+      final sports = p.channels.where((c) => c.isSports).length;
       final top = p.groups.take(4).join(' / ');
       stdout.writeln('${src.id.padRight(18)} '
           '${p.length.toString().padLeft(4)} 频道  '
-          'HD $hd  4K $fourK  组播 $dead  '
+          'HD $hd  4K $fourK  体育 $sports  需UA $needUa  组播 $dead  '
           '${sw.elapsedMilliseconds}ms  [$top]');
     } catch (e) {
       sw.stop();

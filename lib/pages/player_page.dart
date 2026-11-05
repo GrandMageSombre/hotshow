@@ -44,6 +44,9 @@ class PlayerPage extends StatefulWidget {
   /// 电视直播：没有时长概念，也不该写进播放历史
   final bool isLive;
 
+  /// 片源要求的额外请求头（直播源里的 `http-user-agent` / `http-referrer`）
+  final Map<String, String> extraHeaders;
+
   const PlayerPage({
     super.key,
     required this.resource,
@@ -53,6 +56,7 @@ class PlayerPage extends StatefulWidget {
     this.initialEpisode,
     this.startAt,
     this.isLive = false,
+    this.extraHeaders = const {},
   });
 
   @override
@@ -277,9 +281,13 @@ class _PlayerPageState extends State<PlayerPage> {
 
   Map<String, String> _headersFor(String url) {
     final u = Uri.tryParse(url);
+    // 片源自己点名要求的头优先（直播源常见：指定 UA + Referer 才不判盗链）
+    final extra = widget.extraHeaders;
     return {
-      'User-Agent': _ua,
-      if (u != null && u.hasAuthority)
+      'User-Agent': extra['User-Agent'] ?? _ua,
+      if (extra['Referer'] != null)
+        'Referer': extra['Referer']!
+      else if (u != null && u.hasAuthority)
         'Referer': '${u.scheme}://${u.authority}/',
     };
   }

@@ -22,29 +22,60 @@ import 'package:charset/charset.dart';
 import '../models/iptv_channel.dart';
 import 'remote_ua.dart';
 
-/// 一个直播源（GitHub 仓库里的一个 m3u 文件）
+/// 源的类别，决定直播页上它归在「电视」还是「体育」那一栏
+enum IptvCategory {
+  tv('电视'),
+  sports('体育');
+
+  final String label;
+  const IptvCategory(this.label);
+}
+
+/// 一个直播源（GitHub 仓库里的一个 m3u 文件，或一个完整 URL）
 class IptvSourceDef {
   final String id;
   final String name;
 
-  /// `owner/repo/branch/path`
+  /// `owner/repo/branch/path`；以 http 开头时当成完整地址直接用
+  /// （iptv-org 的分类列表在 GitHub Pages 上，不在 raw 仓库里）
   final String path;
   final String note;
+  final IptvCategory category;
 
-  /// 实测频道条数
+  /// 实测频道条数（0 表示没测过——自定义源就没有这个数）
   final int channels;
 
-  /// 抽样实测可播率（百分比）
+  /// 抽样实测可播率（百分比，0 表示没测过）
   final int health;
+
+  /// 源标签上要看得到的关键信息，比如体育源的「NBA」
+  final String badge;
+
+  /// 把整个源的频道都归到这一个分组。
+  ///
+  /// iptv-org 的分类列表里 `group-title` 是多分类拼接（`Kids;Sports`、
+  /// `News;Sports`），直接拿来当分组会冒出几十个怪名字，归一成「体育」更好用。
+  final String groupOverride;
 
   const IptvSourceDef({
     required this.id,
     required this.name,
     required this.path,
     this.note = '',
-    required this.channels,
-    required this.health,
+    this.category = IptvCategory.tv,
+    this.channels = 0,
+    this.health = 0,
+    this.badge = '',
+    this.groupOverride = '',
   });
+
+  bool get isAbsolute => path.startsWith('http');
+
+  /// 源标签上的第二行小字
+  String get statsText {
+    if (channels <= 0) return health > 0 ? '~$health%' : '';
+    return health > 0 ? '$channels台 · ~$health%' : '$channels台';
+  }
 }
 
 /// 内置源：按可播率从高到低排，合并时同名频道优先取前面的。
@@ -56,6 +87,19 @@ const List<IptvSourceDef> kIptvSources = [
     note: '央视频道 / 地方频道 / 纪录 / 儿童，实测最稳',
     channels: 214,
     health: 95,
+  ),
+  IptvSourceDef(
+    id: 'iptvorg_sports',
+    name: '体育赛事',
+    // 分类列表是 iptv-org 的构建产物，只在 GitHub Pages 上
+    path: 'https://iptv-org.github.io/iptv/categories/sports.m3u',
+    note: '全球体育台合集：NBA TV、ESPN、Sky Sports、Eurosport，'
+        '外加 5 个 CCTV 体育台（5+/16/台球/高尔夫网球/风云足球）',
+    category: IptvCategory.sports,
+    badge: 'NBA',
+    channels: 477,
+    health: 80,
+    groupOverride: '体育',
   ),
   IptvSourceDef(
     id: 'bestfan_province',
@@ -172,8 +216,15 @@ class IptvService {
   }
 
   Future<IptvPlaylist> _loadOne(IptvSourceDef def) async {
-    final text = await _fetchWithMirrors(def.path);
-    return parseIptvPlaylist(text);
+    final text = await _fetchWithMirrors(def);
+    final parsed = parseIptvPlaylist(text);
+    if (def.groupOverride.isEmpty) return parsed;
+    // 整源归一到一个分组（体育源的多分类拼接名）
+    final g = def.groupOverride;
+    return IptvPlaylist(
+      channels: [for (final c in parsed.channels) c.withGroup(g)],
+      groups: [g],
+    );
   }
 
   /// 全部合并：并发拉，按名字去重（源已按可播率排序，先到先得）
@@ -203,10 +254,13 @@ class IptvService {
   /// 每个镜像单独限时 12 秒：加速度前缀正常只要 1 秒左右，
   /// 一个镜像卡住就不该继续等它的 20 秒默认超时——否则合并六个源时
   /// 最坏要等到一分多钟。
-  Future<String> _fetchWithMirrors(String path) async {
+  Future<String> _fetchWithMirrors(IptvSourceDef def) async {
+    // 完整 URL（GitHub Pages 上的分类列表）没有镜像可用，直接取
+    final urls = def.isAbsolute
+        ? [def.path]
+        : [for (final prefix in kIptvMirrors) '$prefix${def.path}'];
     Object? lastError;
-    for (final prefix in kIptvMirrors) {
-      final url = '$prefix$path';
+    for (final url in urls) {
       try {
         return await _fetch(url).timeout(const Duration(seconds: 12));
       } catch (e) {

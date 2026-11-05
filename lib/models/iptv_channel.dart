@@ -22,27 +22,71 @@ class IptvChannel {
   final String logo;
   final String tvgId;
 
+  /// 部分源用 `http-user-agent="…"` / `http-referrer="…"` 声明播放要求，
+  /// 不带上就会被 CDN 判成盗链（实测 iptv-org 体育频里有 54 条是这样）。
+  final String userAgent;
+  final String referrer;
+
   const IptvChannel({
     required this.name,
     required this.url,
     this.group = '',
     this.logo = '',
     this.tvgId = '',
+    this.userAgent = '',
+    this.referrer = '',
   });
 
   /// 名字里带这些字样就算高清档（分组筛选和角标用）
-  bool get isHd => RegExp(r'（?\(?(4K|8K|UHD|2160|1080|HD|超清|蓝光)',
-          caseSensitive: false)
-      .hasMatch(name);
+  ///
+  /// 正则统一 static final：列表滚动时每屏要判几十次，getter 里现编正则
+  /// 在 3000 条的量级上是实打实的开销。
+  static final RegExp _hdRe =
+      RegExp(r'（?\(?(4K|8K|UHD|2160|1080|HD|超清|蓝光)', caseSensitive: false);
+  static final RegExp _uhdRe =
+      RegExp(r'(4K|8K|UHD|2160)', caseSensitive: false);
+  static final RegExp _playableRe =
+      RegExp(r'^(https?|rtsp|rtmp)://', caseSensitive: false);
+  static final RegExp _sportsRe = RegExp(
+      r'体育|赛事|篮球|足球|NBA|NFL|MLB|NHL|Sports|ESPN|Eurosport|Sky Sport|'
+      r'英超|西甲|德甲|意甲|法甲|欧冠|网球|斯诺克|奥运|UFC|F1',
+      caseSensitive: false);
+
+  bool get isHd => _hdRe.hasMatch(name);
 
   /// 4K / 8K 单独标出来，用户找超高清时最好用
-  bool get is4K =>
-      RegExp(r'(4K|8K|UHD|2160)', caseSensitive: false).hasMatch(name);
+  bool get is4K => _uhdRe.hasMatch(name);
+
+  /// 体育频道：源里分组基本是 `Sports`，国内源多是「体育」「赛事」。
+  /// 「体育彩票」这类不是转播台，排除掉。
+  bool get isSports =>
+      !name.contains('彩票') && _sportsRe.hasMatch('$name $group');
 
   /// 协议能不能交给播放器。组播（rtp/udp）在手机上没有对应的网络环境，
   /// 直接标成不可播，避免用户点了只看到转圈。
-  bool get playable => RegExp(r'^(https?|rtsp|rtmp)://', caseSensitive: false)
-      .hasMatch(url);
+  bool get playable => _playableRe.hasMatch(url);
+
+  /// 播放器要额外带的请求头；源没要求时返回 null
+  Map<String, String>? get playHeaders {
+    if (userAgent.isEmpty && referrer.isEmpty) return null;
+    return {
+      if (userAgent.isNotEmpty) 'User-Agent': userAgent,
+      if (referrer.isNotEmpty) 'Referer': referrer,
+    };
+  }
+
+  /// 只改分组的拷贝（源级 groupOverride 用）。
+  ///
+  /// 不要手写 `IptvChannel(...)` 重建：模型加字段时那里会静默丢数据。
+  IptvChannel withGroup(String g) => IptvChannel(
+        name: name,
+        url: url,
+        group: g,
+        logo: logo,
+        tvgId: tvgId,
+        userAgent: userAgent,
+        referrer: referrer,
+      );
 
   @override
   String toString() => 'IptvChannel($name, $group)';
@@ -102,6 +146,8 @@ IptvPlaylist parseIptvPlaylist(String content) {
   String pendingGroup = '';
   String pendingLogo = '';
   String pendingTvgId = '';
+  String pendingUa = '';
+  String pendingRef = '';
 
   for (final raw in content.split('\n')) {
     final line = raw.trim();
@@ -113,6 +159,8 @@ IptvPlaylist parseIptvPlaylist(String content) {
       pendingGroup = info.group;
       pendingLogo = info.logo;
       pendingTvgId = info.tvgId;
+      pendingUa = info.userAgent;
+      pendingRef = info.referrer;
       continue;
     }
     if (line.startsWith('#EXTGRP')) {
@@ -121,7 +169,20 @@ IptvPlaylist parseIptvPlaylist(String content) {
       if (g.isNotEmpty && pendingGroup.isEmpty) pendingGroup = g;
       continue;
     }
-    if (line.startsWith('#')) continue; // 其它指令（EXTVLCOPT/EXT-X-…）跳过
+    // `#EXTVLCOPT:http-user-agent=…` 也是播放要求，和 EXTINF 里的属性等价
+    if (line.startsWith('#EXTVLCOPT')) {
+      final opt = _afterColon(line);
+      final eq = opt.indexOf('=');
+      if (eq > 0) {
+        final key = opt.substring(0, eq).trim().toLowerCase();
+        final val = opt.substring(eq + 1).trim();
+        if (key.endsWith('user-agent') && pendingUa.isEmpty) pendingUa = val;
+        // referer / referrer 两种拼法都有人写，按子串判最省事
+        if (key.contains('referer') && pendingRef.isEmpty) pendingRef = val;
+      }
+      continue;
+    }
+    if (line.startsWith('#')) continue; // 其它指令（EXT-X-…/KODIPROP）跳过
 
     // 到这里是一行地址
     if (pendingName.isEmpty) continue;
@@ -141,6 +202,8 @@ IptvPlaylist parseIptvPlaylist(String content) {
       group: pendingGroup.isEmpty ? '其他' : pendingGroup,
       logo: pendingLogo,
       tvgId: pendingTvgId,
+      userAgent: pendingUa,
+      referrer: pendingRef,
     );
     channels.add(ch);
     if (!groups.contains(ch.group)) groups.add(ch.group);
@@ -148,6 +211,8 @@ IptvPlaylist parseIptvPlaylist(String content) {
     pendingGroup = '';
     pendingLogo = '';
     pendingTvgId = '';
+    pendingUa = '';
+    pendingRef = '';
   }
 
   return IptvPlaylist(channels: channels, groups: groups);
@@ -158,7 +223,10 @@ class _ExtInf {
   final String group;
   final String logo;
   final String tvgId;
-  const _ExtInf(this.name, this.group, this.logo, this.tvgId);
+  final String userAgent;
+  final String referrer;
+  const _ExtInf(this.name, this.group, this.logo, this.tvgId,
+      this.userAgent, this.referrer);
 }
 
 /// `#EXTINF:-1 tvg-id="x" group-title="y",显示名`
@@ -179,6 +247,9 @@ _ExtInf _parseExtInf(String line) {
     map['group-title'] ?? '',
     map['tvg-logo'] ?? '',
     map['tvg-id'] ?? '',
+    map['http-user-agent'] ?? '',
+    // 属性名三种拼法都见过：http-referrer / http-referer / referer
+    map['http-referrer'] ?? map['http-referer'] ?? map['referer'] ?? '',
   );
 }
 
