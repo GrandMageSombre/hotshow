@@ -62,3 +62,6 @@ android/build/
 
 # 直播源体检的中间结果（result.jsonl 有 700KB）
 tool/live_verify/out/
+
+# 红果高清/DRM 逆向探针（puppeteer node_modules、站点 JS、抓包媒体，不入库）
+tmp_probe/

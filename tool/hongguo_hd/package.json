@@ -1,0 +1,14 @@
+{
+  "name": "hotshow-hongguo-hd",
+  "version": "1.0.0",
+  "private": true,
+  "description": "红果短剧高清（720p）抓取解密工具（仅供个人学习研究）",
+  "type": "commonjs",
+  "scripts": {
+    "grab": "node decrypt.cjs"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "puppeteer-core": "^23.0.0"
+  }
+}
