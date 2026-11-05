@@ -76,6 +76,10 @@ class _PlayerPageState extends State<PlayerPage> {
 
   int _groupIndex = 0;
   int _episodeIndex = 0;
+
+  /// 直播专用：这一轮自动切换备用线路时已经试过的下标。
+  /// 用户手动选线路/选集会清空它，避免「试过一次的线路以后再也不试」。
+  final Set<int> _liveTried = {};
   Duration? _pendingSeek;
   double _rate = 1.0;
   bool _autoNext = true;
@@ -281,15 +285,21 @@ class _PlayerPageState extends State<PlayerPage> {
 
   Map<String, String> _headersFor(String url) {
     final u = Uri.tryParse(url);
-    // 片源自己点名要求的头优先（直播源常见：指定 UA + Referer 才不判盗链）
     final extra = widget.extraHeaders;
-    return {
+    // 片源自己点名要求的头优先（直播源常见：指定 UA + Referer 才不判盗链）
+    //
+    // 直播默认**不补**同域 Referer：点播站那套「带上自己域名的 Referer 才肯给」
+    // 在直播 CDN 上经常反过来——多一个 Referer 就被判成盗链。
+    // 需要 Referer 的直播源会在 m3u 里写明，走 extraHeaders。
+    final referer = extra['Referer'] ??
+        (!widget.isLive && u != null && u.hasAuthority
+            ? '${u.scheme}://${u.authority}/'
+            : null);
+    final headers = <String, String>{
       'User-Agent': extra['User-Agent'] ?? _ua,
-      if (extra['Referer'] != null)
-        'Referer': extra['Referer']!
-      else if (u != null && u.hasAuthority)
-        'Referer': '${u.scheme}://${u.authority}/',
     };
+    if (referer != null) headers['Referer'] = referer;
+    return headers;
   }
 
   String _cacheKeyFor(int group, int episode) =>
@@ -310,7 +320,11 @@ class _PlayerPageState extends State<PlayerPage> {
     }
     // 参数必须在 open 之前生效，否则这集的提速设置会漏掉
     await _tuneFuture;
+    // 这两个 await 期间用户可能已经退出：直播自动切线路是 fire-and-forget，
+    // 不挡这里就会对已 dispose 的 State 调 setState（直接抛异常）
+    if (!mounted) return;
     await qualityStore.load();
+    if (!mounted) return;
     final epoch = ++_openEpoch;
     final cached = _cache.byKey(_cacheKeyFor(_groupIndex, _episodeIndex));
     final variant = _variantUrl ?? _rememberedVariantFor(ep.url);
@@ -355,6 +369,10 @@ class _PlayerPageState extends State<PlayerPage> {
         _activeVariantUrl = null;
         return _openCurrent(seekTo: seekTo, allowVariantFallback: false);
       }
+      // 直播：这个台的备用地址就是另外几条线路，自动顺着往下试
+      if (_tryNextLiveLine()) return;
+      // 全挂了才报错：先把「正在换线路」的提示收掉，别和错误框一起挂着
+      ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
       setState(() => _error = '$e');
     } finally {
       if (mounted && epoch == _openEpoch) {
@@ -366,6 +384,34 @@ class _PlayerPageState extends State<PlayerPage> {
         }
       }
     }
+  }
+
+  /// 直播起播失败时，顺着还没试过的备用线路再开一次。
+  ///
+  /// 精选目录里每个台最多存 3 个地址，`toResource()` 把它们铺成 3 条线路；
+  /// 主地址挂了不该让用户自己去点「换线路」——那是把兜底的责任推给了用户。
+  /// 返回 true 表示已经发起重试（调用方不要再报错）。
+  bool _tryNextLiveLine() {
+    if (!mounted || !widget.isLive || _r.groups.length <= 1) return false;
+    _liveTried.add(_groupIndex);
+    for (var i = 0; i < _r.groups.length; i++) {
+      if (_liveTried.contains(i)) continue;
+      final g = _r.groupAt(i);
+      if (g == null || g.episodes.isEmpty) {
+        _liveTried.add(i);
+        continue;
+      }
+      _liveTried.add(i);
+      _groupIndex = i;
+      _episodeIndex = 0;
+      _variantUrl = null;
+      _activeVariantUrl = null;
+      _toast('这条打不开，换备用线路 $i 试试');
+      // 不 await：这里还在 catch 里，await 会把 finally 拖到新流程之后
+      unawaited(_openCurrent(allowVariantFallback: false));
+      return true;
+    }
+    return false;
   }
 
   /// 按当前模式挂字幕：外挂文件 / 视频内嵌 / 关闭
@@ -635,6 +681,9 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   Future<void> _switchEpisode(int index, {int? group, Duration? seekTo}) async {
+    // 用户手动切台/切线路：先作废可能还在飞的「自动换备用线路」流程，
+    // 否则两条流程会抢同一个播放器
+    ++_openEpoch;
     // 先按「当前集 + 当前播放位置」落一次进度，再切索引；
     // 否则旧集的位置会被记到新集上，下次续播直接跳到片尾。
     await _saveProgress();
@@ -644,6 +693,8 @@ class _PlayerPageState extends State<PlayerPage> {
       setState(() {
         _groupIndex = group;
         _episodeIndex = index.clamp(0, len - 1).toInt();
+        // 用户自己挑的线路：把「试过了」的清零，下次还能自动兜底
+        _liveTried.clear();
       });
     } else {
       setState(() => _episodeIndex = index);
@@ -1012,6 +1063,7 @@ class _PlayerPageState extends State<PlayerPage> {
       _variantUrl = null;
       _activeVariantUrl = null;
       _variants = const [];
+      _liveTried.clear();
       _pendingSeek = pos > const Duration(seconds: 2) ? pos : null;
       // 字幕是跟着 siteId#vodId 记的，换源要重新取；但**不重置模式**——
       // 用户选的「内嵌字幕」在新源同样适用，关掉会莫名其妙没字幕

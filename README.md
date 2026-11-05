@@ -48,8 +48,8 @@
 | ℹ️ 详情页 | 海报、评分、类型/地区/首播/集数、导演/主演、剧情简介、豆瓣热门短评，一键跳转豆瓣网页 |
 | ▶️ 在线播放 | 详情页一键到已配置的采集站检索「完整资源」（多线路 / 全集），内置 media_kit（libmpv）播放器：选集、切线路、倍速、全屏、自动连播 |
 | ⬇️ 离线缓存 | 单集或整条线路的 m3u8 分片抓到本地并重写为本地播放列表，断网可看；播放进度本地记忆，下次进入自动续播 |
-| 📡 电视直播 | 独立「直播」页，内置 7 个 GitHub 公开 IPTV m3u 源（合计约 3170 条，去重后约 2900 个频道），可切源、按分组筛（央视/卫视/地方/纪录…）、只看高清（4K 单独角标）、搜台名、记住上次用的源；组播地址自动置灰 |
-| 🏀 体育直播 | 「体育赛事」源来自 iptv-org 官方体育分类：477 个台，含 **NBA TV**、ESPN 全套、Sky Sports、Eurosport，以及 CCTV-5+/16/台球/高尔夫网球/风云足球；源里 55 个台要求指定 UA，播放时自动带上 |
+| 📡 电视直播 | 独立「直播」页，**内置 111 个实测可播的台**（央视 26 / 地方 37 / 国外 17 / 体育 31），五个 Tab 切换，搜台名、台标网格；每个台最多 3 个地址，主地址打不开自动切备用线路；组播地址自动置灰 |
+| 🏀 体育直播 | 央视 CCTV-5/5+/16 之外，还有 **NBA TV**、Sky Sports、Eurosport、ESPN、Fox Sports、beIN、NHL、MUTV、纬来体育、精品体育等 31 个体育台 |
 | 🗄️ 采集站管理 | 站点可增删改、启停、连通性自检；**工程不写死任何影视站点地址**，站点由自动搜索或手动填写得到 |
 | 🔎 自动搜索采集站 | **不用填任何地址**，点一下就自动拉取内置的公开清单源并解析出候选采集接口（也支持纯文本 / JSON 数组 / `{"sites":[…]}` / TVBox 风格配置，或手动粘贴），并发探测后标出可用/不可用/已添加，勾选即批量导入 |
 | 💬 在线字幕 | 播放页一键搜索 OpenSubtitles（免登录可搜，匿名有频率限制，可填免费 API Key），下载 zip 自动解包、GBK 自动转 UTF-8；支持粘贴字幕直链、管理本剧字幕、时间轴 ±0.5s 实时微调，换集自动重挂 |
@@ -173,7 +173,8 @@ lib/
 │   │   ├── subtitle_text.dart   # 编码识别（UTF-8/UTF-16/GBK）与时间轴偏移
 │   │   └── subtitle_exception.dart # 字幕异常与用户可读文案
 │   ├── m3u8.dart              # M3U8/HLS 播放列表解析与本地列表生成（纯 Dart）
-│   ├── iptv_service.dart      # 直播源：GitHub m3u 拉取（镜像降级）+ 合并去重 + 缓存
+│   ├── live_catalog.dart      # 直播精选目录（读 assets/live_channels.json，纯 Dart）
+│   ├── iptv_service.dart      # 直播源体检用：GitHub m3u 拉取（镜像降级）+ 解析（UI 不再调用）
 │   ├── hongguo_service.dart   # 红果短剧网页版抓取（_ROUTER_DATA 解析 / 榜单卡片兜底）
 │   ├── page_scraper.dart      # 网址抓取：直链识别 / 爱看机器人专用解析 / 静态嗅探
 │   ├── offline_cache.dart     # 分片下载/离线缓存（并发、取消、断点目录管理）
@@ -187,7 +188,7 @@ lib/
 │   ├── detail_page.dart       # 详情页
 │   ├── resource_page.dart     # 资源检索页（多站点聚合结果）
 │   ├── player_page.dart       # 播放页（media_kit + 选集/倍速/缓存/字幕，直播走 isLive）
-│   ├── live_page.dart         # 电视直播页（切源 / 分组 / 只看高清 / 搜台名）
+│   ├── live_page.dart         # 电视直播页（全部/央视/地方/国外/体育 五个 Tab + 台标网格）
 │   ├── hongguo_page.dart      # 红果短剧页（热播榜 + 真人剧/漫剧/AI 剧，可翻页）
 │   ├── web_grab_page.dart     # 网址抓取页（粘网址或分享文案，解析出可播地址）
 │   ├── subtitle_page.dart     # 在线字幕页（搜索 / 直链导入 / 本剧字幕管理）
@@ -198,14 +199,20 @@ lib/
     ├── show_grid.dart         # 海报网格度量（列数/卡片宽高唯一来源）
     ├── remote_image.dart      # 网络图片（UA/Referer + 多域名重试 + 占位）
     └── common_views.dart      # 错误重试/空态/列表尾组件
+assets/
+└── live_channels.json         # 直播精选台（离线全量实测过可播，见 docs/直播源精选.md）
 tool/api_check.dart            # 豆瓣数据层真实接口集成测试（dart run 直跑）
 tool/source_check.dart         # 采集站接口连通性验证（dart run 直跑）
 tool/discover_check.dart       # 清单拉取 + 批量探测（dart run 直跑）
 tool/subtitle_check.dart       # 字幕搜索/下载/解包验证（dart run 直跑）
 tool/hongguo_check.dart        # 红果短剧榜单/详情/取流实测（dart run 直跑）
 tool/iptv_check.dart           # 直播源逐个实拉：频道数 / HD / 4K / 耗时（dart run 直跑）
+tool/live_verify/verify.py     # 直播全量体检：主列表 + EXT-X-KEY + 三个分片（重建精选目录用）
+tool/live_verify/curate.py     # 归并同名台 + 白名单收敛 + 复验 → assets/live_channels.json
 tool/image_probe.dart          # 豆瓣图床 WAF 探针：四种请求头组合实测（dart run 直跑）
 test/widget_test.dart          # UI 冒烟测试（注入假数据，不访问网络；含窄屏/大字号回归）
+test/live_catalog_test.dart    # 精选目录解析 + 内置 JSON 完整性（分类齐全/无重名/地址合法）
+test/live_page_test.dart       # 直播页 UI：Tab 台数、搜索过滤、窄屏不溢出
 test/iptv_playlist_test.dart   # IPTV m3u 解析：属性引号/逗号、分组、去重、协议判定
 test/hongguo_scraper_test.dart # 红果榜单卡片 / _ROUTER_DATA / 网页抓取解码单测
 test/resource_test.dart        # 采集站检索/解析/排序单测（本地假接口）
