@@ -13,12 +13,19 @@
 ///
 /// 播放地址是固定的 CDN 规则：`/video/public/{vid}/360p.mp4`。
 ///
-/// 网页版**只对访客开放 360p**（约 55 kbps，画面偏糊）。480p / 720p 确实存在，
-/// 走 `POST /api/video/protected/play-info` 能拿到 1.06 / 1.59 Mbps 的地址，
-/// 但那是 CENC-AES-CTR 加密的 DASH 分片（`encv` + `senc`，无 `pssh`），
-/// 内容密钥只在官方 App 内、网页端不下发 —— 试过 9 种候选 key 全部解不出
-/// H.264 起始码。绕过它属于规避技术措施，本项目不做。
-/// 完整探测记录见 `docs/红果高清探测.md`。
+/// **这个文件只有 10 秒。** 不是抓取出错：`mvhd` 里 timescale=1000、
+/// duration=10000，抽了真人剧/漫剧/AI 剧共 4 部、每部前几集，全都正好 10.0 秒；
+/// 官方播放页的 `<video src>` 用的也是这个地址。也就是说红果网页版对
+/// 未登录访客就是「每集 10 秒试看」，第 6 集起直接 403
+/// （`accessible_episode_cnt` 一般是 5）。
+///
+/// 完整版确实存在：`POST /api/video/protected/play-info` 匿名就能拿到
+/// 360p(10.9MB/174s) / 480p / 720p 的地址，但都是 CENC-AES-CTR 加密的 DASH
+/// 分片（`encv` + `senc`，无 `pssh`；实测 mdat 熵 8.000、0 个 NAL 起始码），
+/// 内容密钥只在官方 App 内、网页端不下发。绕过它属于规避技术措施，本项目不做。
+///
+/// 所以 App 里点红果的剧会先问一句「试看 / 搜全集」——
+/// 想看完整就去采集站按剧名找。完整探测记录见 `docs/红果高清探测.md`。
 /// 红果的一个短剧条目（列表页/首页卡片）
 
 library;
@@ -216,7 +223,8 @@ class HongguoService {
     );
   }
 
-  /// 红果的固定播放地址规则（网页版只提供 360p，高码率档位是加密 DASH）。
+  /// 红果的固定播放地址规则。注意这个文件只有 10 秒（试看片段），
+  /// 原因见文件头注释。
   static String mp4UrlOf(String vid) => '$base/video/public/$vid/360p.mp4';
 
   /// 从任意红果网址里取出 `series_id`（详情页、播放页都行）
@@ -389,3 +397,19 @@ String _stripTags(String s) => s
     .replaceAll(RegExp(r'<[^>]+>'), '')
     .replaceAll('&nbsp;', ' ')
     .trim();
+
+/// 把红果的剧名收拾成「能拿去采集站搜」的样子。
+///
+/// 红果的剧名普遍带季数后缀——「十八岁太奶奶驾到，重整家族荣耀第五部」、
+/// 「聚宝仙盆之杂灵根才是真BOSS第十五季」——而采集站按短名索引，
+/// 拿整串去搜基本一条都匹配不上。
+///
+/// 只做两件事：去掉「第X部 / 第X季」、去掉结尾的括号备注。
+/// 去完之后太短（不足 2 个字）说明原名本身就靠这几个字，那就别动它。
+String hongguoSearchKeywordOf(String raw) {
+  final stripped = raw
+      .replaceAll(RegExp(r'第[0-9一二三四五六七八九十百]+[季部]'), '')
+      .replaceAll(RegExp(r'[（(][^）)]*[）)]\s*$'), '')
+      .trim();
+  return stripped.length >= 2 ? stripped : raw;
+}

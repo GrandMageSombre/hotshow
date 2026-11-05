@@ -6,13 +6,14 @@ import '../widgets/common_views.dart';
 import '../widgets/remote_image.dart';
 import '../widgets/show_grid.dart';
 import 'player_page.dart';
+import 'resource_page.dart';
 import 'web_grab_page.dart';
 
-/// 红果短剧：官方网页版（hongguoduanju.com）的真人剧/漫剧/AI 剧列表 + 直接播放。
+/// 红果短剧：官方网页版（hongguoduanju.com）的真人剧/漫剧/AI 剧列表。
 ///
-/// 网页版只对访客开放 360p；480p/720p 走加密 DASH，密钥只在官方 App 内，
-/// 详见 `docs/红果高清探测.md`。页面顶部把这件事写清楚，
-/// 免得用户以为是播放器没切清晰度。
+/// **网页版每集只有 10 秒试看**（官方播放页的 `<video src>` 就是那个 10 秒的
+/// `360p.mp4`，详见 `hongguo_service.dart` 的头注释）。所以点卡片时不直接播，
+/// 先弹「试看 10 秒 / 用剧名搜全集」，想看完整就拿着剧名去采集站找。
 class HongguoPage extends StatefulWidget {
   const HongguoPage({super.key});
 
@@ -106,6 +107,63 @@ class _HongguoPageState extends State<HongguoPage> {
     _reload();
   }
 
+  /// 点卡片先问「试看还是搜全集」。
+  ///
+  /// 红果网页版对未登录访客是**每集 10 秒试看**（`/video/public/{vid}/360p.mp4`
+  /// 里的 mvhd duration 就是 10000/1000，抽了 4 部剧、真人/漫剧/AI 剧都一样）。
+  /// 直接跳到播放器只会让人以为播放器坏了，所以先给个分岔：
+  /// 想看全集就拿着剧名去采集站找。
+  Future<void> _showActions(HongguoItem item) async {
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final scheme = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.play_circle_outline_rounded),
+                title: const Text('试看 10 秒'),
+                subtitle: Text(
+                  '红果网页版每集只放 10 秒',
+                  style: TextStyle(fontSize: 12, color: scheme.outline),
+                ),
+                onTap: () => Navigator.pop(ctx, 'preview'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.search_rounded),
+                title: Text('用「${hongguoSearchKeywordOf(item.title)}」搜全集'),
+                subtitle: Text(
+                  '跳去已配置的采集站找完整版',
+                  style: TextStyle(fontSize: 12, color: scheme.outline),
+                ),
+                onTap: () => Navigator.pop(ctx, 'search'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (!mounted || picked == null) return;
+    if (picked == 'search') {
+      final keyword = hongguoSearchKeywordOf(item.title);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ResourcePage(
+            item: item.toShowItem(),
+            initialKeyword: keyword,
+          ),
+        ),
+      );
+      return;
+    }
+    await _open(item);
+  }
+
   Future<void> _open(HongguoItem item) async {
     // 先把详情页的剧集表取出来；失败就直接提示，不跳空白播放器
     final messenger = ScaffoldMessenger.of(context);
@@ -182,7 +240,7 @@ class _HongguoPageState extends State<HongguoPage> {
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
-                    '来自红果网页版，免费无广告；只给 360p，要 720p 得用官方 App',
+                    '每集仅 10 秒试看 · 点卡片选「搜全集」看完整版',
                     style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant),
                   ),
                 ),
@@ -231,7 +289,7 @@ class _HongguoPageState extends State<HongguoPage> {
               delegate: SliverChildBuilderDelegate(
                 (context, i) => _HongguoTile(
                   item: _items[i],
-                  onTap: () => _open(_items[i]),
+                  onTap: () => _showActions(_items[i]),
                 ),
                 childCount: _items.length,
               ),

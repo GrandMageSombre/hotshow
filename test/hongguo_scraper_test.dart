@@ -270,4 +270,28 @@ void main() {
       expect(r.toResource().vodId, 'https://site.com/play/1');
     });
   });
+
+  group('搜全集用的剧名清洗', () {
+    test('去掉「第X部 / 第X季」后缀', () {
+      expect(hongguoSearchKeywordOf('十八岁太奶奶驾到，重整家族荣耀第五部'),
+          '十八岁太奶奶驾到，重整家族荣耀');
+      expect(hongguoSearchKeywordOf('聚宝仙盆之杂灵根才是真BOSS第十五季'),
+          '聚宝仙盆之杂灵根才是真BOSS');
+      expect(hongguoSearchKeywordOf('某某传第2季'), '某某传');
+    });
+
+    test('去掉结尾的括号备注', () {
+      expect(hongguoSearchKeywordOf('某某剧（2026）'), '某某剧');
+    });
+
+    test('没有后缀的剧名原样返回', () {
+      expect(hongguoSearchKeywordOf('和离后我带女儿横扫魔域'),
+          '和离后我带女儿横扫魔域');
+    });
+
+    test('清洗后太短就保留原名', () {
+      // 去掉「第5季」只剩 1 个字，说明原名就靠这个字，别改
+      expect(hongguoSearchKeywordOf('第5季'), '第5季');
+    });
+  });
 }

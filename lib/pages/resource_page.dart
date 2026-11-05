@@ -23,11 +23,18 @@ class ResourcePage extends StatefulWidget {
   /// 豆瓣别名，作为字幕搜索的片名候选
   final List<String> altTitles;
 
+  /// 首次检索用的关键词（不传就用 [item] 的片名）。
+  ///
+  /// 红果那类站点的剧名带「第五部」「第十五季」后缀，采集站按短名索引，
+  /// 拿整串去搜会一条都匹配不上。标题栏仍显示完整剧名，只是搜的时候用短名。
+  final String? initialKeyword;
+
   const ResourcePage({
     super.key,
     required this.item,
     this.year,
     this.altTitles = const [],
+    this.initialKeyword,
   });
 
   @override
@@ -37,7 +44,8 @@ class ResourcePage extends StatefulWidget {
 class _ResourcePageState extends State<ResourcePage> {
   final Map<String, SiteSearchResult> _bySite = {};
   StreamSubscription<SiteSearchResult>? _sub;
-  late String _keyword = widget.item.title;
+  late String _keyword =
+      (widget.initialKeyword ?? widget.item.title).trim();
   bool _loading = false;
   int _siteCount = 0;
 
