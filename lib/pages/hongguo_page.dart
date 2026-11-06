@@ -6,6 +6,7 @@ import '../widgets/common_views.dart';
 import '../widgets/remote_image.dart';
 import '../widgets/show_grid.dart';
 import 'player_page.dart';
+import 'hongguo_hd_page.dart';
 import 'resource_page.dart';
 import 'web_grab_page.dart';
 
@@ -124,6 +125,15 @@ class _HongguoPageState extends State<HongguoPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
+                leading: const Icon(Icons.hd_rounded),
+                title: const Text('高清 720P 直接看'),
+                subtitle: Text(
+                  '手机内置解密，无需电脑；每集首次起播稍等几秒',
+                  style: TextStyle(fontSize: 12, color: scheme.outline),
+                ),
+                onTap: () => Navigator.pop(ctx, 'hd'),
+              ),
+              ListTile(
                 leading: const Icon(Icons.play_circle_outline_rounded),
                 title: const Text('试看 10 秒'),
                 subtitle: Text(
@@ -148,6 +158,10 @@ class _HongguoPageState extends State<HongguoPage> {
       },
     );
     if (!mounted || picked == null) return;
+    if (picked == 'hd') {
+      await _openHd(item);
+      return;
+    }
     if (picked == 'search') {
       final keyword = hongguoSearchKeywordOf(item.title);
       Navigator.push(
@@ -190,6 +204,45 @@ class _HongguoPageState extends State<HongguoPage> {
         builder: (_) => PlayerPage(
           resource: res,
           altTitles: [item.title],
+        ),
+      ),
+    );
+  }
+
+  /// 打开手机端高清播放页：先取全集 vid，再进 WebView 解密播放。
+  ///
+  /// 解密跑在系统 WebView 里（站点自带的加密播放器），所以**不需要电脑**；
+  /// 代价是每集首次起播要等几秒解密。
+  Future<void> _openHd(HongguoItem item) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    List<String> vids;
+    try {
+      vids = await _service.fetchVidList(item.seriesId);
+    } catch (e) {
+      if (mounted && route != null && route.isCurrent) navigator.pop();
+      messenger.showSnackBar(SnackBar(content: Text('取剧集失败：${_friendly(e)}')));
+      return;
+    }
+    if (!mounted) return;
+    if (route != null && route.isCurrent) navigator.pop();
+    if (vids.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('这部剧没有拿到可播放的集')));
+      return;
+    }
+    await navigator.push(
+      MaterialPageRoute(
+        builder: (_) => HongguoHdPage(
+          seriesId: item.seriesId,
+          title: item.title,
+          vids: vids,
         ),
       ),
     );

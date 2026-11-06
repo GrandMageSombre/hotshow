@@ -178,6 +178,35 @@ class HongguoService {
     return buildResource(detail, seriesId: seriesId, fallback: fallback);
   }
 
+  /// 详情页里的全部单集 vid（按顺序）。
+  ///
+  /// 高清播放页用它做选集：网页播放器地址是
+  /// `/player/{series_id}/{vid}`，必须先有 vid 才能进。
+  Future<List<String>> fetchVidList(String seriesId) async {
+    final html = await _getHtml('$base/detail?series_id=$seriesId');
+    final data = parseRouterData(html);
+    if (data == null) {
+      throw const FormatException('页面结构变化：没有找到 _ROUTER_DATA');
+    }
+    final detail = _findDetail(groupsOf(data));
+    if (detail == null) {
+      throw const FormatException('没有解析到剧集信息（可能已下架或需要登录）');
+    }
+    return vidsOf(detail);
+  }
+
+  /// 纯函数：从详情页数据里取 `vid_list`（供测试与 [fetchVidList] 复用）。
+  static List<String> vidsOf(Map<String, dynamic> detail) {
+    final series = detail['seriesDetail'];
+    final sd = series is Map ? series : const <String, dynamic>{};
+    final raw = sd['vid_list'];
+    if (raw is! List) return const [];
+    return [
+      for (final v in raw)
+        if (_text(v).isNotEmpty) _text(v),
+    ];
+  }
+
   /// 纯函数：把详情页的 `detail_$` 数据转成 [MediaResource]。
   /// 独立出来便于单测（不需要网络）。
   static MediaResource buildResource(
