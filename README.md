@@ -50,7 +50,7 @@
 | ⬇️ 离线缓存 | 单集或整条线路的 m3u8 分片抓到本地并重写为本地播放列表，断网可看；播放进度本地记忆，下次进入自动续播 |
 | 📡 电视直播 | 独立「直播」页，**内置 111 个实测可播的台**（央视 26 / 地方 37 / 国外 17 / 体育 31），五个 Tab 切换，搜台名、台标网格；每个台最多 3 个地址，主地址打不开自动切备用线路；组播地址自动置灰 |
 | 🏀 体育直播 | 央视 CCTV-5/5+/16 之外，还有 **NBA TV**、Sky Sports、Eurosport、ESPN、Fox Sports、beIN、NHL、MUTV、纬来体育、精品体育等 31 个体育台 |
-| 🎬 红果高清 | 红果短剧页可选「**高清 720P 直接看**」：在系统 WebView 里跑站点自带的解密播放器，**手机本地解密、不需要电脑**，支持选集；需要 Android 10+ / 较新的系统 WebView |
+| 🎬 红果高清 | 红果短剧页可选「**高清 720P**」：隐藏 WebView 里跑站点自带解密器拿到明文，**纯 Dart 合并音视频**后缓存到本机，再用原生播放器播（选集/倍速/手势都一致）；首次解密一集几十秒，之后秒开。需 Android 10+ / 较新系统 WebView |
 | 🗄️ 采集站管理 | 站点可增删改、启停、连通性自检；**工程不写死任何影视站点地址**，站点由自动搜索或手动填写得到 |
 | 🔎 自动搜索采集站 | **不用填任何地址**，点一下就自动拉取内置的公开清单源并解析出候选采集接口（也支持纯文本 / JSON 数组 / `{"sites":[…]}` / TVBox 风格配置，或手动粘贴），并发探测后标出可用/不可用/已添加，勾选即批量导入 |
 | 💬 在线字幕 | 播放页一键搜索 OpenSubtitles（免登录可搜，匿名有频率限制，可填免费 API Key），下载 zip 自动解包、GBK 自动转 UTF-8；支持粘贴字幕直链、管理本剧字幕、时间轴 ±0.5s 实时微调，换集自动重挂 |
@@ -177,6 +177,8 @@ lib/
 │   ├── live_catalog.dart      # 直播精选目录（读 assets/live_channels.json，纯 Dart）
 │   ├── iptv_service.dart      # 直播源体检用：GitHub m3u 拉取（镜像降级）+ 解析（UI 不再调用）
 │   ├── hongguo_service.dart   # 红果短剧网页版抓取（_ROUTER_DATA 解析 / 榜单卡片兜底）
+│   ├── hongguo_hd_fetcher.dart# 红果高清取片：隐藏 WebView 解密 + 收明文分片 + 落盘缓存
+│   ├── hongguo_mux.dart       # 纯 Dart fMP4 合并（音/视频轨 → 单个 mp4，不重编码）
 │   ├── page_scraper.dart      # 网址抓取：直链识别 / 爱看机器人专用解析 / 静态嗅探
 │   ├── offline_cache.dart     # 分片下载/离线缓存（并发、取消、断点目录管理）
 │   ├── playback_store.dart    # 播放进度（续播）持久化
@@ -191,7 +193,7 @@ lib/
 │   ├── player_page.dart       # 播放页（media_kit + 选集/倍速/缓存/字幕，直播走 isLive）
 │   ├── live_page.dart         # 电视直播页（全部/央视/地方/国外/体育 五个 Tab + 台标网格）
 │   ├── hongguo_page.dart      # 红果短剧页（热播榜 + 真人剧/漫剧/AI 剧，可翻页）
-│   ├── hongguo_hd_page.dart   # 红果高清播放页（WebView 内跑站点解密播放器，手机本地解 720p）
+│   ├── hongguo_hd_page.dart   # 红果高清调度页（2×2 隐藏 WebView 解密 → 交给原生播放页）
 │   ├── web_grab_page.dart     # 网址抓取页（粘网址或分享文案，解析出可播地址）
 │   ├── subtitle_page.dart     # 在线字幕页（搜索 / 直链导入 / 本剧字幕管理）
 │   ├── site_settings_page.dart# 采集站管理页
